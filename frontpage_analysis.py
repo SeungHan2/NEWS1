@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from typing import List, Dict, Optional
 
 import requests
@@ -169,7 +170,7 @@ def summarize_article(source: str, url: str, text: str, test_mode: bool) -> str:
 
 # ----------------------------------------
 # 4) 여러 기사 요약을 비교 분석 (테스트 모드 지원)
-#    2번 항목: 기사별 분석 X, "주제별 + 언론사별 반응"으로 정리
+#    2번 항목 포맷 변경: "주제별 요약"만 남기고 그 안에 언론사+톤/프레임 녹여쓰기
 # ----------------------------------------
 def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
     """
@@ -204,26 +205,26 @@ def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
 1) 모든 기사에서 **공통으로 등장하는 핵심 사실**을 정리하라.
    - 사건·정책·인물·숫자를 중심으로 bullet 형태로 정리
 
-2) 개별 기사 목록으로 나열하지 말고, 내용을 기준으로 **주제별로 묶어서** 논조를 비교하라.
-   - 예를 들어 (실제 주제는 네가 판단해서 정하라):
+2) 기사를 내용에 따라 3~6개의 **주제**로 나누고, 각 주제마다 '주제별 요약'만 작성하라.
+   - 예를 들어 (실제 주제 이름은 네가 판단해서 정하라):
      - A) 관세·대기업 투자·국내 산업/일자리
      - B) 대장동·검찰·검사장 징계/인사
      - C) 한·미 동맹·방위비·조인트 팩트시트
      - D) 청년 고용·주거·세대 격차
      - E) 생성형 AI·기술·연구윤리
-   - 각 주제별로 다음을 서술하라:
-     1) 이 주제를 다룬 기사와 언론사(예: 동아·조선·경향·한겨레 등)는 누구인가
-     2) 그 언론사들이 이 주제를 어떤 **톤·프레임**으로 다루는지 비교하라
-        - 예: 위기·안심·홍보·고발·구조적 비판 등
-        - 정부/대기업/야당/서민/청년/국제사회에 대한 태도 차이를 적어라
-
-   - 중요한 점:
-     - **[기사 1], [기사 2]… 식으로 하나씩 길게 분석하지 말고,**
-     - 반드시 "A 주제: 각 언론의 반응", "B 주제: 각 언론의 반응" 형식으로만 정리하라.
+   - 각 주제 아래에는 **다음 형식으로만** 서술하라.
+     - "A 주제: (주제 이름)"
+       - 동아/조선/중앙은 ~~~한 톤·프레임으로 다룬다.
+       - 경향/한겨레는 ~~~한 톤·프레임으로 다룬다.
+       - 한국일보(또는 기타 중도 매체)는 ~~~ 식으로 다룬다.
+   - 즉, 주제별로 **각 언론사의 톤과 프레임을 한 단락 안에 녹여서** 요약하되,
+     - "1) 이 주제를 다룬 기사와 언론사", "2) 각 언론의 톤·프레임 비교" 같은 하위 번호 제목은 쓰지 말 것
+     - 개별 기사 번호([기사 1] 등)를 다시 언급하지 말 것
 
 3) 언론사 이름(동아일보, 조선일보, 한겨레, 경향신문, 중앙일보, 한국일보 등)을 참고하여,
    전체적으로 **보수/진보/중도/경제지** 등 언론 지형이 어떻게 갈려 있는지 해석하라.
-   - 각 언론이 위에서 정리한 주제들에 대해 어떤 패턴으로 반응하는지(친정부/반정부, 친시장/반시장, 동맹 강화/비용 비판 등)를 정리하라.
+   - 각 언론이 위에서 정리한 주제들에 대해 어떤 패턴으로 반응하는지
+     (친정부/반정부, 친시장/반시장, 동맹 강화/비용 비판 등)를 정리하라.
 
 4) 마지막으로,
    독자가 이 기사들을 읽을 때
@@ -254,6 +255,90 @@ def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
 
 
 # ----------------------------------------
+# 4-1) 링크 섹션을 위한 "주제별 분류" (초저비용 gpt-5-nano)
+#      → { "A. 관세·대기업 투자·국내 산업/일자리": [1,2,6,...], ... } 형태
+# ----------------------------------------
+def classify_topics(summary_items: List[Dict]) -> Dict[str, List[int]]:
+    """
+    요약들을 바탕으로 기사들을 3~6개 주제로 묶어 주제별 링크 섹션을 만들기 위한 분류.
+    응답 형식 (JSON만 반환하도록 강하게 요구):
+    {
+      "A. 관세·대기업 투자·국내 산업/일자리": [1, 2, 5],
+      "B. 대장동·검찰·검사장 징계/인사": [3, 7],
+      ...
+    }
+    실패 시 빈 dict 반환.
+    """
+    model = "gpt-5-nano"
+
+    blocks = []
+    for item in summary_items:
+        idx = item["index"]
+        source = item["source"]
+        summary = item["summary"]
+        blocks.append(
+            f"[기사 {idx}] 언론사: {source}\n요약:\n{summary}\n"
+        )
+    joined = "\n\n".join(blocks)
+
+    prompt = f"""
+너는 기사 요약들을 주제별로 묶는 분류기다.
+
+아래에 [기사 N] 형식으로 여러 기사 요약이 주어진다.
+각 기사를 내용 기준으로 3~6개의 주제로 묶어라.
+
+반환 형식은 반드시 **JSON만** 사용해야 한다.
+JSON 오브젝트의 key는 "A. 주제 이름" 같은 문자열,
+value는 그 주제에 속하는 기사 번호(N)의 정수 배열이다.
+
+예시:
+{{
+  "A. 관세·대기업 투자·국내 산업/일자리": [1, 2, 5],
+  "B. 대장동·검찰·검사장 징계/인사": [3, 7],
+  "C. 한·미 동맹·방위비·조인트 팩트시트": [4, 6],
+  "D. 청년 고용·주거·세대 격차": [8],
+  "E. 생성형 AI·기술·연구윤리": [9]
+}}
+
+주의:
+- 반드시 유효한 JSON만 출력하라.
+- JSON 바깥에 다른 텍스트(설명, 코드블록 등)를 절대 넣지 마라.
+- 기사 번호는 [기사 N]의 N 값을 사용하라.
+
+[기사 요약들]
+{joined}
+""".strip()
+
+    log("[단계] 주제별 링크 구성을 위한 분류 호출 시작 (모델=gpt-5-nano)")
+    try:
+        t0 = time.perf_counter()
+        resp = client.responses.create(
+            model=model,
+            input=prompt,
+        )
+        dt = time.perf_counter() - t0
+        log(f"[단계] 주제 분류 응답 수신 (소요 {dt:.1f}초)")
+
+        try:
+            text = resp.output[0].content[0].text
+        except Exception:
+            text = getattr(resp, "output_text", "")
+
+        data = json.loads(text)
+        # JSON 구조가 맞는지 간단 체크
+        if not isinstance(data, dict):
+            raise ValueError("JSON 최상위가 dict가 아님")
+        return {
+            str(k): [int(n) for n in v]
+            for k, v in data.items()
+            if isinstance(v, list)
+        }
+    except Exception as e:
+        log(f"[경고] 주제 분류 실패, 기본 링크 리스트 형식으로 대체: {e}")
+        return {}
+
+
+# ----------------------------------------
 # 5) 텔레그램으로 결과 전송
 #    - 길이 4096자 제한을 고려해 여러 메시지로 나눠서 전송
 # ----------------------------------------
@@ -269,7 +354,19 @@ def send_telegram_message(text: str) -> None:
 
     # 텔레그램 메시지는 최대 4096자 → 조금 여유 있게 3500자로 나눔
     chunk_size = 3500
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+    # 줄 단위로 나눠서 청크 끊기 (HTML/마크업 안 쓰고 순수 텍스트이므로 안전)
+    lines = text.splitlines(keepends=True)
+    chunks: List[str] = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) > chunk_size and current:
+            chunks.append(current)
+            current = line
+        else:
+            current += line
+    if current:
+        chunks.append(current)
 
     total = len(chunks)
     log(f"[단계] 텔레그램 전송 시작 (총 {total}개 청크)")
@@ -369,20 +466,45 @@ def run_pipeline(
     log("[단계] 최종 비교·분석 생성 단계로 진입")
     analysis_body = compare_summaries(summary_items, test_mode=test_mode)
 
+    # 3단계: 링크 섹션 생성을 위한 주제 분류
+    topic_map = classify_topics(summary_items)
+    idx_map = {item["index"]: item for item in summary_items}
+
     # 모드 정보 헤더
     mode_label = "테스트 (저비용: gpt-5-nano)" if test_mode else "일반 (고품질: 요약 gpt-5-mini, 분석 gpt-5.1)"
     header = f"[모드] {mode_label}\n"
 
-    # 링크 목록 생성
-    link_lines = []
-    for item in summary_items:
-        idx = item["index"]
-        source = item["source"]
-        url = item["url"]
-        link_lines.append(f"{idx}. [{source}] {url}")
+    # 링크 목록 생성 (주제별)
+    link_lines: List[str] = []
+    if topic_map:
+        link_lines.append("[기사 링크 모음 (주제별)]")
+        for topic_label in sorted(topic_map.keys()):
+            link_lines.append(f"{topic_label}")
+            # 같은 주제 안에서 언론사별로 묶기
+            by_source: Dict[str, List[str]] = {}
+            for idx in topic_map[topic_label]:
+                item = idx_map.get(idx)
+                if not item:
+                    continue
+                source = item["source"]
+                url = item["url"]
+                by_source.setdefault(source, []).append(url)
+            for source, urls in by_source.items():
+                # 한 줄에 같은 언론사의 URL들을 , 로 붙여서 표현
+                joined_urls = ", ".join(urls)
+                link_lines.append(f"- {source}: {joined_urls}")
+            link_lines.append("")  # 주제 간 빈 줄
+    else:
+        # 분류 실패 시: 기존처럼 평탄한 리스트
+        link_lines.append("[기사 링크 모음]")
+        for item in summary_items:
+            idx = item["index"]
+            source = item["source"]
+            url = item["url"]
+            link_lines.append(f"{idx}. [{source}] {url}")
 
-    links_block = "\n".join(link_lines)
-    links_section = "\n\n----------\n[기사 링크 모음]\n" + links_block
+    links_section = "\n".join(link_lines)
+    links_section = "\n\n----------\n" + links_section
 
     final_report = header + "\n" + analysis_body + links_section
 
