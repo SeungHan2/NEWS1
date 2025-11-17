@@ -8,7 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 # ----------------------------------------
-# 환경 변수 로드 (.env는 로컬용, GitHub Actions에서는 env로딩)
+# 환경 변수 로드 (.env는 로컬용, GitHub Actions에서는 env 로딩)
 # ----------------------------------------
 load_dotenv()
 
@@ -17,6 +17,16 @@ if not api_key:
     raise SystemExit("OPENAI_API_KEY 환경변수가 설정되지 않았습니다. OPENAI_API_KEY를 설정하세요.")
 
 client = OpenAI(api_key=api_key)
+
+
+def is_test_mode() -> bool:
+    """
+    TEST_MODE 환경변수(true/1/yes/on)이면 테스트 모드.
+    - 테스트 모드: gpt-5-nano (최저 비용)
+    - 일반 모드: 요약 gpt-5-mini, 분석 gpt-5.1 (고품질)
+    """
+    val = os.getenv("TEST_MODE", "false").strip().lower()
+    return val in ("1", "true", "yes", "y", "on")
 
 
 # ----------------------------------------
@@ -112,9 +122,14 @@ def fetch_article_text(url: str) -> str:
 
 
 # ----------------------------------------
-# 3) 기사 1개 요약 (gpt-5-mini 사용)
+# 3) 기사 1개 요약 (테스트 모드 지원)
 # ----------------------------------------
-def summarize_article(source: str, url: str, text: str) -> str:
+def summarize_article(source: str, url: str, text: str, test_mode: bool) -> str:
+    if test_mode:
+        model = "gpt-5-nano"
+    else:
+        model = "gpt-5-mini"
+
     prompt = f"""
 아래는 한국 신문 1면 기사 전문이다.
 
@@ -132,7 +147,7 @@ def summarize_article(source: str, url: str, text: str) -> str:
 """.strip()
 
     resp = client.responses.create(
-        model="gpt-5-mini",  # 요약 단계는 가성비 좋은 mini 모델
+        model=model,
         input=prompt,
     )
 
@@ -143,16 +158,21 @@ def summarize_article(source: str, url: str, text: str) -> str:
 
 
 # ----------------------------------------
-# 4) 여러 기사 요약을 비교 분석 (gpt-5.1 사용)
+# 4) 여러 기사 요약을 비교 분석 (테스트 모드 지원)
 #    2번 항목: 기사별 분석 X, "주제별 + 언론사별 반응"으로 정리
 # ----------------------------------------
-def compare_summaries(summary_items: List[Dict]) -> str:
+def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
     """
     summary_items: [
       { "index": 1, "source": "동아일보", "url": "...", "summary": "..." },
       ...
     ]
     """
+    if test_mode:
+        model = "gpt-5-nano"
+    else:
+        model = "gpt-5.1"
+
     blocks = []
     for item in summary_items:
         idx = item["index"]
@@ -206,7 +226,7 @@ def compare_summaries(summary_items: List[Dict]) -> str:
 """.strip()
 
     resp = client.responses.create(
-        model="gpt-5.1",  # 최종 분석은 가장 높은 품질 모델
+        model=model,
         input=[
             {"role": "system", "content": "너는 한국어로 답변하는 미디어 비평가다."},
             {"role": "user", "content": prompt},
@@ -267,6 +287,9 @@ def run_pipeline(
     url_file: str = "urls.txt",
     out_dir: str = "output_frontpage",
 ) -> None:
+    test_mode = is_test_mode()
+    print(f"[INFO] TEST_MODE = {test_mode}")
+
     if not os.path.exists(url_file):
         raise SystemExit(f"URL 파일을 찾을 수 없습니다: {url_file}")
 
@@ -294,7 +317,7 @@ def run_pipeline(
             continue
 
         try:
-            summary = summarize_article(source, url, article_text)
+            summary = summarize_article(source, url, article_text, test_mode=test_mode)
         except Exception as e:
             print(f"    [에러] 요약 생성 실패: {e}")
             continue
@@ -317,7 +340,24 @@ def run_pipeline(
     # 2단계: 요약들을 기반으로 최종 비교·분석
     print("\n[+] 요약들을 기반으로 최종 비교·분석 생성 중...")
 
-    final_report = compare_summaries(summary_items)
+    analysis_body = compare_summaries(summary_items, test_mode=test_mode)
+
+    # 모드 정보 헤더
+    mode_label = "테스트 (저비용: gpt-5-nano)" if test_mode else "일반 (고품질: 요약 gpt-5-mini, 분석 gpt-5.1)"
+    header = f"[모드] {mode_label}\n"
+
+    # 링크 목록 생성
+    link_lines = []
+    for item in summary_items:
+        idx = item["index"]
+        source = item["source"]
+        url = item["url"]
+        link_lines.append(f"{idx}. [{source}] {url}")
+
+    links_block = "\n".join(link_lines)
+    links_section = "\n\n----------\n[기사 링크 모음]\n" + links_block
+
+    final_report = header + "\n" + analysis_body + links_section
 
     # 최종 리포트 파일 저장
     report_path = os.path.join(out_dir, "final_report.txt")
