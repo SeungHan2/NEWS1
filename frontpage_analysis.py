@@ -8,40 +8,22 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 # ----------------------------------------
-# 환경 변수 로드 (.env 지원)
+# 환경 변수 로드 (.env는 로컬용, GitHub Actions에서는 env로딩)
 # ----------------------------------------
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    raise SystemExit("OPENAI_API_KEY 환경변수가 설정되지 않았습니다. .env 파일 또는 환경변수를 확인하세요.")
+    raise SystemExit("OPENAI_API_KEY 환경변수가 설정되지 않았습니다. OPENAI_API_KEY를 설정하세요.")
 
 client = OpenAI(api_key=api_key)
 
 
 # ----------------------------------------
 # 1) urls.txt에서 (언론사, URL) 목록 읽기
-#    - '# 동아일보' 같은 주석 줄을 언론사 이름으로 사용
+#    '# 동아일보' 같은 줄을 언론사 이름으로 사용
 # ----------------------------------------
 def load_items_from_file(path: str) -> List[Dict[str, Optional[str]]]:
-    """
-    urls.txt 예시:
-
-    # 동아일보
-    https://n.news.naver.com/article/newspaper/020/0003674837?date=20251117
-    ...
-
-    # 한국일보
-    https://...
-
-    반환 형식:
-    [
-      {"index": 1, "source": "동아일보", "url": "https://..."},
-      {"index": 2, "source": "동아일보", "url": "https://..."},
-      {"index": 5, "source": "한국일보", "url": "https://..."},
-      ...
-    ]
-    """
     items: List[Dict[str, Optional[str]]] = []
     current_source: Optional[str] = None
     idx = 0
@@ -52,13 +34,13 @@ def load_items_from_file(path: str) -> List[Dict[str, Optional[str]]]:
             if not line:
                 continue
 
-            # '# 언론사명' → 현재 언론사 설정
+            # '# 언론사명' → 현재 언론사 이름으로 사용
             if line.startswith("#"):
                 name = line[1:].strip()
                 current_source = name if name else None
                 continue
 
-            # 이 줄은 URL이라고 가정
+            # URL 줄
             idx += 1
             items.append(
                 {
@@ -82,7 +64,7 @@ def fetch_article_text(url: str) -> str:
             "Chrome/120.0 Safari/537.36"
         )
     }
-    resp = requests.get(url, headers=headers, timeout=15)
+    resp = requests.get(url, headers=headers, timeout=20)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -99,7 +81,7 @@ def fetch_article_text(url: str) -> str:
         "div#dic_area",            # 네이버 뉴스
         "div#newsEndContents",     # 네이버 구형
         "div.newsct_article",      # 네이버 신형
-        "div#articeBody",          # 일부 신문
+        "div#articeBody",
         "div.article_body",
         "div.article-body",
         "div#articleBodyContents",
@@ -150,7 +132,7 @@ def summarize_article(source: str, url: str, text: str) -> str:
 """.strip()
 
     resp = client.responses.create(
-        model="gpt-5-mini",  # ← 요약 단계는 가성비 좋은 mini 모델
+        model="gpt-5-mini",  # 요약 단계는 가성비 좋은 mini 모델
         input=prompt,
     )
 
@@ -164,12 +146,6 @@ def summarize_article(source: str, url: str, text: str) -> str:
 # 4) 여러 기사 요약을 비교 분석 (gpt-5.1 사용)
 # ----------------------------------------
 def compare_summaries(summary_items: List[Dict]) -> str:
-    """
-    summary_items: [
-      { "index": 1, "source": "동아일보", "url": "...", "summary": "..." },
-      ...
-    ]
-    """
     blocks = []
     for item in summary_items:
         idx = item["index"]
@@ -208,7 +184,7 @@ def compare_summaries(summary_items: List[Dict]) -> str:
 """.strip()
 
     resp = client.responses.create(
-        model="gpt-5.1",  # ← 최종 분석은 가장 높은 품질의 모델 사용
+        model="gpt-5.1",  # 최종 분석은 가장 높은 품질 모델
         input=[
             {"role": "system", "content": "너는 한국어로 답변하는 미디어 비평가다."},
             {"role": "user", "content": prompt},
@@ -222,9 +198,48 @@ def compare_summaries(summary_items: List[Dict]) -> str:
 
 
 # ----------------------------------------
-# 5) 전체 파이프라인
-#    - 기사/요약은 파일로 저장하지 않고
-#      최종 리포트만 final_report.txt로 저장
+# 5) 텔레그램으로 결과 전송
+#    - 길이 4096자 제한을 고려해 여러 메시지로 나눠서 전송
+# ----------------------------------------
+def send_telegram_message(text: str) -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("[경고] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 설정되지 않아 텔레그램 전송을 생략합니다.")
+        return
+
+    base_url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    # 텔레그램 메시지는 최대 4096자 → 조금 여유 있게 3500자로 나눔
+    chunk_size = 3500
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        if total > 1:
+            header = f"[신문 1면 분석 리포트 {i}/{total}]\n\n"
+        else:
+            header = "[신문 1면 분석 리포트]\n\n"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": header + chunk,
+        }
+
+        try:
+            resp = requests.post(base_url, data=payload, timeout=20)
+            resp.raise_for_status()
+            print(f"  → 텔레그램 전송 완료 ({i}/{total})")
+        except Exception as e:
+            print(f"  [에러] 텔레그램 전송 실패 ({i}/{total}): {e}")
+            break
+
+        time.sleep(0.5)  # 너무 빠른 연속 전송 방지
+
+
+# ----------------------------------------
+# 6) 전체 파이프라인
 # ----------------------------------------
 def run_pipeline(
     url_file: str = "urls.txt",
@@ -282,11 +297,15 @@ def run_pipeline(
 
     final_report = compare_summaries(summary_items)
 
+    # 최종 리포트 파일 저장
     report_path = os.path.join(out_dir, "final_report.txt")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(final_report)
 
     print(f"[완료] 최종 리포트 저장: {report_path}")
+
+    # 텔레그램으로도 전송
+    send_telegram_message(final_report)
 
 
 if __name__ == "__main__":
