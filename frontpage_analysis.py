@@ -29,6 +29,12 @@ def is_test_mode() -> bool:
     return val in ("1", "true", "yes", "y", "on")
 
 
+def log(msg: str) -> None:
+    """단순 로그 함수 (앞에 시간 붙여서 보기 좋게)"""
+    now = time.strftime("%H:%M:%S")
+    print(f"[{now}] {msg}")
+
+
 # ----------------------------------------
 # 1) urls.txt에서 (언론사, URL) 목록 읽기
 #    '# 동아일보' 같은 줄을 언론사 이름으로 사용
@@ -146,10 +152,14 @@ def summarize_article(source: str, url: str, text: str, test_mode: bool) -> str:
 {text}
 """.strip()
 
+    log(f"  ↳ OpenAI 요약 요청 시작 (모델={model})")
+    t0 = time.perf_counter()
     resp = client.responses.create(
         model=model,
         input=prompt,
     )
+    dt = time.perf_counter() - t0
+    log(f"  ↳ 요약 완료 (소요 {dt:.1f}초)")
 
     try:
         return resp.output[0].content[0].text
@@ -225,6 +235,8 @@ def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
 {joined}
 """.strip()
 
+    log(f"[단계] 최종 비교·분석용 OpenAI 호출 시작 (모델={model})")
+    t0 = time.perf_counter()
     resp = client.responses.create(
         model=model,
         input=[
@@ -232,6 +244,8 @@ def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
             {"role": "user", "content": prompt},
         ],
     )
+    dt = time.perf_counter() - t0
+    log(f"[단계] 최종 비교·분석 생성 완료 (소요 {dt:.1f}초)")
 
     try:
         return resp.output[0].content[0].text
@@ -248,7 +262,7 @@ def send_telegram_message(text: str) -> None:
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
     if not token or not chat_id:
-        print("[경고] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 설정되지 않아 텔레그램 전송을 생략합니다.")
+        log("[경고] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID가 설정되지 않아 텔레그램 전송을 생략합니다.")
         return
 
     base_url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -258,6 +272,7 @@ def send_telegram_message(text: str) -> None:
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
     total = len(chunks)
+    log(f"[단계] 텔레그램 전송 시작 (총 {total}개 청크)")
     for i, chunk in enumerate(chunks, start=1):
         if total > 1:
             header = f"[신문 1면 분석 리포트 {i}/{total}]\n\n"
@@ -272,9 +287,9 @@ def send_telegram_message(text: str) -> None:
         try:
             resp = requests.post(base_url, data=payload, timeout=20)
             resp.raise_for_status()
-            print(f"  → 텔레그램 전송 완료 ({i}/{total})")
+            log(f"  → 텔레그램 전송 완료 ({i}/{total})")
         except Exception as e:
-            print(f"  [에러] 텔레그램 전송 실패 ({i}/{total}): {e}")
+            log(f"  [에러] 텔레그램 전송 실패 ({i}/{total}): {e}")
             break
 
         time.sleep(0.5)  # 너무 빠른 연속 전송 방지
@@ -287,8 +302,13 @@ def run_pipeline(
     url_file: str = "urls.txt",
     out_dir: str = "output_frontpage",
 ) -> None:
+    start_all = time.perf_counter()
     test_mode = is_test_mode()
-    print(f"[INFO] TEST_MODE = {test_mode}")
+
+    log("========================================")
+    log("신문 1면 분석 파이프라인 시작")
+    log(f"TEST_MODE = {test_mode}")
+    log("========================================")
 
     if not os.path.exists(url_file):
         raise SystemExit(f"URL 파일을 찾을 수 없습니다: {url_file}")
@@ -297,29 +317,34 @@ def run_pipeline(
     if not items:
         raise SystemExit("URL이 한 개도 없습니다. urls.txt를 확인하세요.")
 
+    total = len(items)
+    log(f"[단계] URL 로드 완료: 총 {total}개 기사")
+
     os.makedirs(out_dir, exist_ok=True)
 
     summary_items: List[Dict] = []
 
     # 1단계: 각 기사 크롤링 + 요약
-    total = len(items)
     for item in items:
         idx = item["index"]
         source = item["source"]
         url = item["url"]
 
-        print(f"[+] ({idx}/{total}) 기사 크롤링 및 요약 중: [{source}] {url}")
-
+        log(f"[기사 {idx}/{total}] [{source}] 본문 크롤링 시작")
         try:
+            t0 = time.perf_counter()
             article_text = fetch_article_text(url)
+            dt = time.perf_counter() - t0
+            log(f"[기사 {idx}/{total}] 본문 크롤링 완료 (소요 {dt:.1f}초, 길이 {len(article_text)}자)")
         except Exception as e:
-            print(f"    [에러] 기사 본문 추출 실패: {e}")
+            log(f"[기사 {idx}/{total}] [에러] 기사 본문 추출 실패: {e}")
             continue
 
+        log(f"[기사 {idx}/{total}] 요약 생성 시작")
         try:
             summary = summarize_article(source, url, article_text, test_mode=test_mode)
         except Exception as e:
-            print(f"    [에러] 요약 생성 실패: {e}")
+            log(f"[기사 {idx}/{total}] [에러] 요약 생성 실패: {e}")
             continue
 
         summary_items.append(
@@ -330,6 +355,7 @@ def run_pipeline(
                 "summary": summary,
             }
         )
+        log(f"[기사 {idx}/{total}] 요약 완료")
 
         # 너무 빠른 연속 호출을 피하기 위한 약간의 딜레이
         time.sleep(0.3)
@@ -337,9 +363,10 @@ def run_pipeline(
     if not summary_items:
         raise SystemExit("요약이 한 개도 생성되지 않았습니다.")
 
-    # 2단계: 요약들을 기반으로 최종 비교·분석
-    print("\n[+] 요약들을 기반으로 최종 비교·분석 생성 중...")
+    log(f"[단계] 요약 생성 완료: {len(summary_items)}/{total}개 기사")
 
+    # 2단계: 요약들을 기반으로 최종 비교·분석
+    log("[단계] 최종 비교·분석 생성 단계로 진입")
     analysis_body = compare_summaries(summary_items, test_mode=test_mode)
 
     # 모드 정보 헤더
@@ -364,10 +391,13 @@ def run_pipeline(
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(final_report)
 
-    print(f"[완료] 최종 리포트 저장: {report_path}")
+    log(f"[단계] 최종 리포트 파일 저장: {report_path}")
 
     # 텔레그램으로도 전송
     send_telegram_message(final_report)
+
+    total_dt = time.perf_counter() - start_all
+    log(f"[완료] 전체 파이프라인 종료 (총 소요 {total_dt:.1f}초)")
 
 
 if __name__ == "__main__":
