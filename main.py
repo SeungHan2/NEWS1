@@ -162,7 +162,7 @@ def analyze_with_gemini(articles: list) -> dict:
     print("[INFO] Gemini 1.5 Flash 분석 요청 시작...")
     
     model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash',
+        model_name='gemini-1.5-flash-latest',
         generation_config={"response_mime_type": "application/json"}
     )
 
