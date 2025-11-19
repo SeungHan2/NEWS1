@@ -33,7 +33,8 @@ PRESS_LIST: List[Tuple[str, str]] = [
     ("한겨레", "028"),
     ("경향신문", "032"),
 ]
-BASE_NEWPAPER_URL = "[https://media.naver.com/press/](https://media.naver.com/press/){press}/newspaper?date={date}"
+# URL 조합을 f-string으로 명시적으로 처리하기 위해 사용하지 않음
+# BASE_NEWPAPER_URL = "https://media.naver.com/press/{press}/newspaper?date={date}"
 
 # ----------------------------------------
 # [Part 1] 네이버 1면 링크 수집
@@ -45,7 +46,8 @@ def get_kst_today() -> str:
 
 def fetch_html(url: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    resp = requests.get(url, headers=headers, timeout=20)
+    # URL 오류 방지를 위해 strip() 적용
+    resp = requests.get(url.strip(), headers=headers, timeout=20) 
     resp.raise_for_status()
     return resp.text
 
@@ -87,20 +89,19 @@ def collect_naver_news_links() -> List[Dict[str, str]]:
     print(f"[INFO] {date}일자 1면 기사 수집 시작")
     all_items = []
     for press_name, press_code in PRESS_LIST:
+        url = "" # url 변수 초기화
         try:
-            # === [수정 부분 시작] ===
-            # f-string을 사용해 명확하게 URL 조합
+            # f-string을 사용해 명확하게 URL 조합 (이전 오류 해결 코드 반영)
             url = f"https://media.naver.com/press/{press_code}/newspaper?date={date}".strip()
-            # === [수정 부분 끝] ===
             
             html = fetch_html(url)
             links = extract_a1_links(html, url, press_code, date)
             for link in links:
                 all_items.append({"source": press_name, "url": link})
         except Exception as e:
-            # 에러 로그 출력 시 URL을 같이 출력하여 디버깅 용이하게 함
+            # 에러 로그 출력 시 URL을 같이 출력
             print(f"  [에러] {press_name} 수집 실패: {e}")
-            print(f"  [URL] 요청 실패 URL: {url}") # URL 추가
+            print(f"  [URL] 요청 실패 URL: {url}")
     return all_items
 
 # ----------------------------------------
@@ -139,7 +140,6 @@ def analyze_with_gemini(articles: list) -> dict:
     
     model = genai.GenerativeModel(
         model_name=GEMINI_MODEL_NAME,
-        # JSON 출력을 강제하여 파싱을 용이하게 함
         generation_config={"response_mime_type": "application/json"}
     )
 
@@ -167,7 +167,7 @@ def analyze_with_gemini(articles: list) -> dict:
                 "title": "주제 제목 (예: 금투세 폐지 논란 가열)",
                 "ids": [0, 2, 5],
                 "summary_bullets": ["핵심 내용 1", "핵심 내용 2"],
-                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(줄글로 작성). **500자 이상**을 채우도록 노력해야 한다."
+                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(줄글로 작성). 500자 이상을 채우도록 노력해야 한다."
             }}
         ]
     }}
@@ -176,20 +176,20 @@ def analyze_with_gemini(articles: list) -> dict:
     {articles_text}
     """
 
-    response = None # response 변수 정의
+    response = None
 
     try:
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
-        # JSON 응답을 감싸는 마크다운 코드 블록 제거 (JSON 파싱 오류 방지)
+        # JSON 응답을 감싸는 마크다운 코드 블록 제거
         if raw_text.startswith('```json'):
             raw_text = raw_text.removeprefix('```json').removesuffix('```').strip()
         
         return json.loads(raw_text)
         
     except json.JSONDecodeError as e:
-        # JSON 디코딩 실패 시: 모델이 생성한 원본 텍스트를 출력
+        # JSON 디코딩 실패 시: 모델이 생성한 원본 텍스트를 출력 (디버깅용)
         print(f"[CRITICAL ERROR] JSON 디코딩 실패: {e}")
         print("--- Gemini Raw Output Start ---")
         if response:
@@ -197,7 +197,7 @@ def analyze_with_gemini(articles: list) -> dict:
         else:
             print("No response object available.")
         print("--- Gemini Raw Output End ---")
-        return {"topics": []} # 실패했으므로 빈 리스트 반환
+        return {"topics": []}
     
     except Exception as e:
         print(f"[CRITICAL ERROR] Gemini 분석 중 기타 에러 발생: {e}")
@@ -209,27 +209,21 @@ def analyze_with_gemini(articles: list) -> dict:
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
-        # 1. 토큰 생성
-        r = requests.get("https://api.telegra.ph/createAccount?short_name=NewsAI").json()
+        r = requests.get("[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)").json()
         token = r['result']['access_token']
         
-        # 2. 줄바꿈을 Node로 변환
         content_nodes = []
-        # 제목을 H3 태그로 추가 (웹뷰 가독성 개선)
         content_nodes.append({"tag": "h3", "children": ["AI 통합 리포트"]})
         
         current_p_children = []
         for line in text_body.split('\n'):
             line = line.strip()
             if not line and current_p_children:
-                # 빈 줄일 경우 이전 내용을 p 태그로 묶고 초기화
                 content_nodes.append({"tag": "p", "children": current_p_children})
                 current_p_children = []
             elif line:
-                # 텍스트가 있는 경우 추가 (하이퍼링크 처리 로직은 생략)
                 current_p_children.append(line)
         
-        # 마지막 남은 내용 처리
         if current_p_children:
             content_nodes.append({"tag": "p", "children": current_p_children})
         
@@ -239,7 +233,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "content": json.dumps(content_nodes),
             "return_content": False
         }
-        resp = requests.post("https://api.telegra.ph/createPage", data=data).json()
+        resp = requests.post("[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)", data=data).json()
         
         if resp.get('ok'):
             return resp['result']['url']
@@ -255,15 +249,15 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     
     chunk_size = 4000 
     for i in range(0, len(message), chunk_size):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID, 
             "text": message[i:i+chunk_size], 
-            "parse_mode": "HTML", # 링크 하이퍼텍스트를 위해 HTML 사용
-            "disable_web_page_preview": True # 웹페이지 미리보기 비활성화
+            "parse_mode": "HTML", 
+            "disable_web_page_preview": True 
         }
         requests.post(url, data=payload)
         time.sleep(0.5)
@@ -308,8 +302,12 @@ def main():
 
     topics = result.get("topics", [])
     
+    # === [요청 사항 반영: 주제별 기사 수에 따라 내림차순 정렬] ===
+    # 'ids' 리스트의 길이를 기준으로 내림차순 정렬
+    topics.sort(key=lambda t: len(t.get('ids', [])), reverse=True)
+    # =========================================================
+    
     if not topics:
-        # JSON 파싱 실패로 topics가 없을 경우, 기본 메시지 추가
         telegram_msg += "<b>⚠️ 리포트 생성 실패: 분석 과정에서 오류가 발생했거나, AI가 답변을 거부했습니다. GitHub Actions 로그를 확인하세요.</b>"
         webview_text = "리포트 생성 실패"
     else:
@@ -320,22 +318,17 @@ def main():
             full_article = topic.get('full_article', '')
 
             # --- 텔레그램 메시지 구성 ---
-            # 제목 + 기사 수
             telegram_msg += f"━━━━━━━━━━━━━━\n"
             telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
             
-            # 하이퍼링크 생성 (가독성 개선)
             link_tags = []
             for idx in ids:
                 if idx < len(contents):
                     item = contents[idx]
-                    # <a href="url">언론사</a> 형태
                     link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
             telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
             
-            # 요약 불렛 포인트
             for bullet in bullets:
-                # 텔레그램에서는 • 대신 HTML 엔티티를 사용하여 더 안전하게 표시
                 telegram_msg += f"• {bullet}\n"
             telegram_msg += "\n"
 
