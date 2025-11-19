@@ -4,7 +4,7 @@ import json
 import requests
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import google.generativeai as genai
@@ -13,21 +13,15 @@ from dotenv import load_dotenv
 # ----------------------------------------
 # 환경 변수 및 설정
 # ----------------------------------------
-load_dotenv() # 로컬 테스트용 (.env 파일 로드)
+load_dotenv()
 
-# GitHub Actions에서는 Secrets에서 주입됨
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not GEMINI_API_KEY:
-    print("[경고] GEMINI_API_KEY가 없습니다. (로컬 테스트가 아니라면 GitHub Secrets 확인 필요)")
-
-# Gemini 설정
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Naver 신문사별 코드 (제공해주신 코드 활용)
 PRESS_LIST: List[Tuple[str, str]] = [
     ("동아일보", "020"),
     ("한국일보", "469"),
@@ -38,26 +32,21 @@ PRESS_LIST: List[Tuple[str, str]] = [
 ]
 BASE_NEWPAPER_URL = "https://media.naver.com/press/{press}/newspaper?date={date}"
 
-
 # ----------------------------------------
-# [Part 1] 네이버 1면 링크 수집 (Crawler)
+# [Part 1] 네이버 1면 링크 수집
 # ----------------------------------------
 def get_kst_today() -> str:
-    """현재 KST(UTC+9) 기준 날짜를 YYYYMMDD로 반환"""
     now_utc = datetime.utcnow()
     now_kst = now_utc + timedelta(hours=9)
     return now_kst.strftime("%Y%m%d")
 
 def fetch_html(url: str) -> str:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     resp = requests.get(url, headers=headers, timeout=20)
     resp.raise_for_status()
     return resp.text
 
 def extract_a1_links(html: str, page_url: str, press_code: str, date: str) -> List[str]:
-    """A1(1면) 기사 링크 추출"""
     soup = BeautifulSoup(html, "html.parser")
     candidates: List[str] = []
 
@@ -65,25 +54,20 @@ def extract_a1_links(html: str, page_url: str, press_code: str, date: str) -> Li
         href = a["href"]
         if f"/article/newspaper/{press_code}/" not in href: continue
         if f"date={date}" not in href: continue
-
         full_url = urljoin(page_url, href)
-
-        # 부모 쪽에 A1/1면 표시 있는지 확인
+        
         is_a1 = False
         parent = a
         for _ in range(6):
             parent = parent.parent
             if parent is None: break
             text = parent.get_text(" ", strip=True)
-            if any(key in text for key in ["A1면", "A01면", "A 1면", "A 01면", "1면", "1 面"]):
+            if any(key in text for key in ["A1면", "A01면", "1면", "1 面"]):
                 is_a1 = True
                 break
+        if is_a1: candidates.append(full_url)
 
-        if is_a1:
-            candidates.append(full_url)
-
-    # Fallback: A1 키워드 없으면 상위 4개 가져오기
-    if not candidates:
+    if not candidates: # Fallback
         seen = set()
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -92,103 +76,90 @@ def extract_a1_links(html: str, page_url: str, press_code: str, date: str) -> Li
                 if full_url not in seen:
                     candidates.append(full_url)
                     seen.add(full_url)
-            if len(candidates) >= 4:
-                break
-    
-    # 중복 제거
+            if len(candidates) >= 4: break
     return list(set(candidates))
 
 def collect_naver_news_links() -> List[Dict[str, str]]:
-    """모든 언론사의 1면 기사 링크를 수집하여 리스트로 반환"""
     date = get_kst_today()
     print(f"[INFO] {date}일자 1면 기사 수집 시작")
-    
     all_items = []
-    
     for press_name, press_code in PRESS_LIST:
-        page_url = BASE_NEWPAPER_URL.format(press=press_code, date=date)
         try:
-            html = fetch_html(page_url)
-            links = extract_a1_links(html, page_url, press_code, date)
-            print(f"  - {press_name}: {len(links)}개 발견")
+            url = BASE_NEWPAPER_URL.format(press=press_code, date=date)
+            html = fetch_html(url)
+            links = extract_a1_links(html, url, press_code, date)
             for link in links:
                 all_items.append({"source": press_name, "url": link})
         except Exception as e:
             print(f"  [에러] {press_name} 수집 실패: {e}")
-            
     return all_items
 
 # ----------------------------------------
-# [Part 2] 본문 크롤링 (Parallel Fetcher)
+# [Part 2] 본문 크롤링
 # ----------------------------------------
 def fetch_single_article_content(item: dict) -> dict:
-    """단일 기사 본문 추출"""
-    url = item["url"]
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get(item["url"], headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
-
-        # 네이버 뉴스 본문 셀렉터 모음
-        selectors = [
-            "div#dic_area", "div#newsEndContents", "div.newsct_article",
-            "div#articeBody", "div#articleBodyContents"
-        ]
+        selectors = ["div#dic_area", "div#newsEndContents", "div.newsct_article", "div#articleBodyContents"]
         content = ""
         for selector in selectors:
             node = soup.select_one(selector)
             if node:
                 content = node.get_text("\n", strip=True)
                 break
-        
         return {
             "source": item["source"],
-            "url": url,
-            "content": content if content else "본문 추출 실패"
+            "url": item["url"],
+            "content": content[:4000] if content else "본문 없음" # 길이 제한
         }
-    except Exception as e:
-        return {"source": item["source"], "url": url, "content": f"에러: {e}"}
+    except:
+        return item
 
 def fetch_contents_parallel(items: list) -> list:
-    """ThreadPool로 빠르게 본문 긁어오기"""
     print(f"[INFO] 총 {len(items)}개 기사 본문 크롤링 중...")
     with ThreadPoolExecutor(max_workers=10) as executor:
         results = list(executor.map(fetch_single_article_content, items))
     return results
 
 # ----------------------------------------
-# [Part 3] Gemini 분석 및 리포트 생성
+# [Part 3] Gemini 분석 (리포트 작성)
 # ----------------------------------------
 def analyze_with_gemini(articles: list) -> dict:
     print("[INFO] Gemini 2.0 Flash 분석 요청 시작...")
     
+    # 모델명을 환경에 맞게 수정 (사용자 로그 기반: gemini-2.0-flash)
     model = genai.GenerativeModel(
-        model_name='gemini-2.0-flash', 
+        model_name='gemini-2.0-flash',
         generation_config={"response_mime_type": "application/json"}
     )
 
     articles_text = ""
     for i, art in enumerate(articles):
-        articles_text += f"[ID:{i}] {art['source']} - {art['content'][:3000]}\n" # 너무 길면 자름
+        articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
     prompt = f"""
-    오늘자 한국 주요 신문 1면 기사들이다. 
-    이 내용들을 종합해 '오늘의 조간 브리핑'을 작성해라.
-
+    너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
+    
     [요구사항]
-    1. 전체를 관통하는 핵심 이슈와 분위기 요약 (Markdown 형식)
-    2. 주요 주제별(정치, 경제, 사회 등)로 기사들을 분류하고 각 주제에 대해 각 언론사의 논조(Tone)를 비교 분석하라.
-    3. 반드시 JSON 형식으로만 답하라.
+    1. 기사들을 유사한 주제(정치, 경제, 사회 등)로 그룹화하라.
+    2. **주제별 통합 기사 작성**: 각 주제에 대해 개별 기사를 단순히 나열하지 말고, 모든 내용을 종합하여 **하나의 완결된 기사**로 새로 써라. (논조 차이가 있다면 문장 속에 자연스럽게 녹여라)
+    3. **요약본(Bullets)**: 바쁜 독자를 위해, 통합 기사의 내용을 3줄 이내의 핵심 단문(Bullet point)으로 요약하라.
+    4. 결과는 반드시 JSON 형식이어야 한다.
 
-    [JSON 출력 형식]
+    [JSON 구조]
     {{
-        "report_body": "여기에 전체 리포트 본문(마크다운) 작성. 이모지 사용해서 가독성 높일 것.",
         "topics": [
-            {{ "title": "주제A", "ids": [0, 1, 5] }},
-            {{ "title": "주제B", "ids": [2, 3] }}
+            {{
+                "title": "주제 제목 (예: 금투세 폐지 논란 가열)",
+                "ids": [0, 2, 5],
+                "summary_bullets": ["핵심 내용 1", "핵심 내용 2"],
+                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(Markdown 아님, 줄글로 작성)"
+            }}
         ]
     }}
 
-    [기사 목록]
+    [기사 데이터]
     {articles_text}
     """
 
@@ -197,83 +168,162 @@ def analyze_with_gemini(articles: list) -> dict:
         return json.loads(response.text)
     except Exception as e:
         print(f"[에러] Gemini 분석 실패: {e}")
-        return {"report_body": "분석에 실패했습니다.", "topics": []}
+        return {"topics": []}
 
 # ----------------------------------------
-# [Part 4] 텔레그램 전송
+# [Part 4] Telegraph 페이지 생성 (웹뷰)
+# ----------------------------------------
+def create_telegraph_page(title: str, html_content: str) -> str:
+    """Telegra.ph에 페이지를 생성하고 URL 반환"""
+    try:
+        # 1. 계정 생성 (1회용 토큰)
+        auth_resp = requests.get("https://api.telegra.ph/createAccount?short_name=NewsBot&author_name=MorningBriefing").json()
+        access_token = auth_resp['result']['access_token']
+
+        # 2. 페이지 생성
+        # Telegraph는 Node 형식을 요구하지만, 편의상 간단한 텍스트/링크 구조로 변환
+        payload = {
+            "access_token": access_token,
+            "title": title,
+            "content": json.dumps([{"tag": "p", "children": ["(아래 내용은 AI가 신문 1면을 종합한 것입니다)"]}, 
+                                   {"tag": "hr"}, 
+                                   {"tag": "div", "children": [html_content]}])
+        }
+        
+        # 간단한 HTML -> Node 변환 로직이 없으므로, 텍스트를 통째로 넣는 꼼수 대신
+        # 텔레그램 봇으로 보낼 때는 직접 HTML 태그를 지원하므로, 
+        # 여기서는 사용자가 '웹에서 보기'를 눌렀을 때 깔끔한 텍스트를 보여주기 위해
+        # Python 내부에서 리스트를 Node로 변환하는 간단한 매퍼가 필요합니다.
+        # 하지만 복잡성을 줄이기 위해 여기서는 '제목'과 '본문'을 합친 텍스트를 보냅니다.
+        
+        return "https://telegra.ph/" # 실패 시 기본값 (실제 구현은 복잡하므로 아래 메인 로직에서 대체)
+    except:
+        return ""
+
+def create_telegraph_simple(title: str, text_body: str) -> str:
+    """간단한 텍스트 기반 Telegraph 페이지 생성"""
+    try:
+        # 1. 토큰 생성
+        r = requests.get("https://api.telegra.ph/createAccount?short_name=NewsAI").json()
+        token = r['result']['access_token']
+        
+        # 2. 줄바꿈을 Node로 변환
+        content_nodes = []
+        for line in text_body.split('\n'):
+            if line.strip():
+                content_nodes.append({"tag": "p", "children": [line.strip()]})
+        
+        data = {
+            "access_token": token,
+            "title": title,
+            "content": json.dumps(content_nodes),
+            "return_content": False
+        }
+        resp = requests.post("https://api.telegra.ph/createPage", data=data).json()
+        return resp['result']['url']
+    except Exception as e:
+        print(f"Telegraph 생성 실패: {e}")
+        return ""
+
+# ----------------------------------------
+# [Part 5] 텔레그램 전송 (HTML 모드)
 # ----------------------------------------
 def send_telegram(message: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    chunk_size = 3500 # 텔레그램 제한 대비 여유있게
-
+    
+    # 메시지가 길면 나누기
+    chunk_size = 4000 
     for i in range(0, len(message), chunk_size):
-        data = {"chat_id": TELEGRAM_CHAT_ID, "text": message[i:i+chunk_size], "parse_mode": "Markdown"}
-        requests.post(url, data=data)
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "text": message[i:i+chunk_size], 
+            "parse_mode": "HTML", # 링크 하이퍼텍스트를 위해 HTML 사용
+            "disable_web_page_preview": True
+        }
+        requests.post(url, data=payload)
         time.sleep(0.5)
 
 # ----------------------------------------
-# 메인 실행 로직
+# 메인 실행
 # ----------------------------------------
 def main():
-    # 1. 링크 수집
+    # 1. 링크 수집 및 통계
     links = collect_naver_news_links()
-    if not links:
-        print("수집된 기사가 없습니다. 종료합니다.")
-        return
+    if not links: return
+
+    # 언론사별 수량 카운트
+    stats = {}
+    for item in links:
+        stats[item['source']] = stats.get(item['source'], 0) + 1
+    
+    # 통계 헤더 생성
+    header_stats = " | ".join([f"{k} {v}" for k, v in stats.items()])
 
     # 2. 본문 크롤링
     contents = fetch_contents_parallel(links)
 
     # 3. Gemini 분석
-    if not GEMINI_API_KEY:
-        print("API 키가 없어 분석을 생략합니다.")
-        return
-    
+    if not GEMINI_API_KEY: return
     result = analyze_with_gemini(contents)
     
-    # 4. 리포트 조립
-    final_report = f"🗞 *오늘의 신문 1면 브리핑* ({get_kst_today()})\n\n"
-    final_report += result.get("report_body", "")
+    # 4. 리포트 및 웹뷰 컨텐츠 생성
+    today_str = get_kst_today()
     
-    final_report += "\n\n🔗 *관련 기사 원문*\n"
-    for topic in result.get("topics", []):
-        final_report += f"\n📌 *{topic['title']}*\n"
+    # 텔레그램용 메시지 (요약 위주)
+    telegram_msg = f"<b>🗞 {today_str} 신문 1면 브리핑</b>\n\n"
+    telegram_msg += f"📊 <b>수집 현황:</b> {header_stats}\n\n"
+    
+    # 웹뷰용 전체 텍스트
+    webview_text = f"{today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
+
+    topics = result.get("topics", [])
+    for topic in topics:
+        title = topic.get('title', '무제')
+        ids = topic.get('ids', [])
+        bullets = topic.get('summary_bullets', [])
+        full_article = topic.get('full_article', '')
+
+        # --- 텔레그램 메시지 구성 ---
+        # 제목 + 기사 수
+        telegram_msg += f"━━━━━━━━━━━━━━\n"
+        telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
         
-        # 해당 주제의 기사들 모으기
-        topic_urls = {}
-        for idx in topic['ids']:
+        # 하이퍼링크 생성 (가독성 개선)
+        link_tags = []
+        for idx in ids:
             if idx < len(contents):
                 item = contents[idx]
-                src = item['source']
-                if src not in topic_urls: topic_urls[src] = []
-                topic_urls[src].append(item['url'])
+                # <a href="url">언론사</a> 형태
+                link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
+        telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
         
-        for src, urls in topic_urls.items():
-            # 링크가 여러 개면 첫 번째만 대표로 표시하거나 나열
-            final_report += f"- {src}: [기사보기]({urls[0]})\n"
+        # 요약 불렛 포인트
+        for bullet in bullets:
+            telegram_msg += f"• {bullet}\n"
+        telegram_msg += "\n"
 
-    # 5. 전송
+        # --- 웹뷰 텍스트 구성 ---
+        webview_text += f"### {title} ({len(ids)}건)\n"
+        webview_text += "====================\n"
+        webview_text += "[핵심 요약]\n"
+        for bullet in bullets:
+            webview_text += f"- {bullet}\n"
+        webview_text += "\n[통합 기사]\n"
+        webview_text += f"{full_article}\n\n"
+        webview_text += "\n"
+
+    # 5. Telegraph 페이지 생성 (긴 화면용)
+    webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
+    
+    # 텔레그램 메시지 하단에 링크 추가
+    if webview_url:
+        telegram_msg += f"\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
+
+    # 6. 전송
     print("[INFO] 텔레그램 전송 중...")
-    send_telegram(final_report)
+    send_telegram(telegram_msg)
     print("[INFO] 완료.")
-
-# main.py 맨 아래 실행 부분에 디버깅용 코드 추가
-
-if __name__ == "__main__":
-    # [디버깅] 사용 가능한 모델 리스트 출력
-    try:
-        print("=== [DEBUG] Available Models ===")
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(m.name)
-        print("================================")
-    except Exception as e:
-        print(f"[DEBUG] 모델 리스트 조회 실패: {e}")
-
-    main()
 
 if __name__ == "__main__":
     main()
