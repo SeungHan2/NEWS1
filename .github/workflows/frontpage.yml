@@ -1,51 +1,33 @@
-name: Run frontpage analysis (KST 06:00 + manual)
+name: Daily Newspaper Briefing
 
 on:
-  # 매일 KST 06:00 (UTC 21:00) 자동 실행
   schedule:
-    - cron: "0 21 * * *"
-
-  # GitHub에서 "Run workflow" 버튼 눌러 수동 실행
-  workflow_dispatch:
-    inputs:
-      test_mode:
-        description: "테스트 모드로 실행? (gpt-5-nano 사용, 비용 최소화)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
+    # UTC 21:00 = KST 06:00 (Next Day)
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 수동 실행 버튼 활성화 (테스트용)
 
 jobs:
-  run:
+  run-news-bot:
     runs-on: ubuntu-latest
-
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # workflow_dispatch면 github.event.inputs.test_mode, 아니면 빈 문자열 → 'false'로 fallback
-      TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build urls.txt from Naver (today KST)
-        run: |
-          python build_urls_from_naver.py
-
-      - name: Run frontpage analysis
-        run: |
-          python frontpage_analysis.py
+      - name: Run News Scraper & Analyzer
+        env:
+          # 깃허브 Settings > Secrets and variables > Actions에 등록된 키들
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
