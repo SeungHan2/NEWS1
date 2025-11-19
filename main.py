@@ -263,7 +263,7 @@ def send_telegram(message: str):
         
     # URL 구성: 문자열 연결 방식으로 변경하여 챗봇 오염 방어 (수정됨)
     # 텔레그램 토큰이 포함된 URL 문자열이 [로 시작하지 않도록 주의하십시오.
-    url = "https://api.telegram.org/bot + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
     
     # 🚨 디버깅 코드 추가: URL 길이를 출력하고, 토큰이 삽입된 URL의 앞부분을 확인
     masked_url = url.replace(TELEGRAM_BOT_TOKEN, "***masked***")
