@@ -161,8 +161,9 @@ def fetch_contents_parallel(items: list) -> list:
 def analyze_with_gemini(articles: list) -> dict:
     print("[INFO] Gemini 1.5 Flash 분석 요청 시작...")
     
+    # 모델명 수정: 'gemini-1.5-flash-latest' -> 'gemini-1.5-flash'
     model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash-latest',
+        model_name='gemini-1.5-flash', 
         generation_config={"response_mime_type": "application/json"}
     )
 
