@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import html
 from typing import List, Dict, Optional
 
 import requests
@@ -170,7 +171,7 @@ def summarize_article(source: str, url: str, text: str, test_mode: bool) -> str:
 
 # ----------------------------------------
 # 4) 여러 기사 요약을 비교 분석 (테스트 모드 지원)
-#    2번 항목 포맷 변경: "주제별 요약"만 남기고 그 안에 언론사+톤/프레임 녹여쓰기
+#    새 포맷: (2) 주제별 핵심 요약 → (3) 주제별 언론사별 중요 포인트
 # ----------------------------------------
 def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
     """
@@ -200,37 +201,50 @@ def compare_summaries(summary_items: List[Dict], test_mode: bool) -> str:
 아래는 서로 다른 언론사 1면 기사들의 요약이다.
 각 [기사 N]은 하나의 기사에 대응하며, '언론사' 정보가 포함되어 있다.
 
-다음 네 가지 작업을 수행하라.
+리포트는 다음 순서를 염두에 두고 작성하되,
+(1. 주제별 기사 링크)는 코드에서 따로 생성하므로,
+여기서는 **(2)와 (3), 그리고 전체 해석·비판 포인트**만 생성하라.
 
-1) 모든 기사에서 **공통으로 등장하는 핵심 사실**을 정리하라.
-   - 사건·정책·인물·숫자를 중심으로 bullet 형태로 정리
+[출력 구조]
 
-2) 기사를 내용에 따라 3~6개의 **주제**로 나누고, 각 주제마다 '주제별 요약'만 작성하라.
-   - 예를 들어 (실제 주제 이름은 네가 판단해서 정하라):
-     - A) 관세·대기업 투자·국내 산업/일자리
-     - B) 대장동·검찰·검사장 징계/인사
-     - C) 한·미 동맹·방위비·조인트 팩트시트
-     - D) 청년 고용·주거·세대 격차
-     - E) 생성형 AI·기술·연구윤리
-   - 각 주제 아래에는 **다음 형식으로만** 서술하라.
-     - "A 주제: (주제 이름)"
-       - 동아/조선/중앙은 ~~~한 톤·프레임으로 다룬다.
-       - 경향/한겨레는 ~~~한 톤·프레임으로 다룬다.
-       - 한국일보(또는 기타 중도 매체)는 ~~~ 식으로 다룬다.
-   - 즉, 주제별로 **각 언론사의 톤과 프레임을 한 단락 안에 녹여서** 요약하되,
-     - "1) 이 주제를 다룬 기사와 언론사", "2) 각 언론의 톤·프레임 비교" 같은 하위 번호 제목은 쓰지 말 것
-     - 개별 기사 번호([기사 1] 등)를 다시 언급하지 말 것
+[2] 주제별 핵심 요약
+- 3~6개의 주제를 잡아서, 각 주제마다 다음 형식으로 정리한다.
+  - "A 주제: (주제 이름)"
+    - 이 주제를 관통하는 사건·정책·갈등의 핵심을 3~6줄 내로 간결하게 요약
+    - 가능한 한 숫자·날짜·고유명사는 그대로 사용
+    - 개별 언론사 이름은 여기에서는 언급하지 말고, 전체 흐름 기준으로만 정리
 
-3) 언론사 이름(동아일보, 조선일보, 한겨레, 경향신문, 중앙일보, 한국일보 등)을 참고하여,
-   전체적으로 **보수/진보/중도/경제지** 등 언론 지형이 어떻게 갈려 있는지 해석하라.
-   - 각 언론이 위에서 정리한 주제들에 대해 어떤 패턴으로 반응하는지
-     (친정부/반정부, 친시장/반시장, 동맹 강화/비용 비판 등)를 정리하라.
+[3] 주제별 언론사별로 중요시하는 점
+- 위에서 사용한 주제 이름과 동일한 순서/라벨(A,B,...)을 사용한다.
+- 각 주제 아래, 다음 형식으로 **언론사별 톤·프레임·중요 포인트**를 정리한다.
+  - "A 주제: (주제 이름)"
+    - 동아일보/조선일보/중앙일보(보수 계열)는 ~~~을 중시하며, ~~~한 톤으로 다룬다.
+    - 한겨레/경향신문(진보 계열)는 ~~~을 중시하며, ~~~한 톤으로 다룬다.
+    - 한국일보(또는 기타 중도·경제지)는 ~~~을 중시하며, ~~~한 톤으로 다룬다.
+- 반드시 "어느 언론사가 무엇을 더 중요하게 보는지"가 드러나도록 쓴다.
+- 개별 기사 번호([기사 1] 등)는 다시 언급하지 않는다.
 
-4) 마지막으로,
-   독자가 이 기사들을 읽을 때
-   **비판적으로 봐야 할 포인트 3~5가지**를 정리하라.
-   - 가능하면 위에서 나눈 주제들과 연결해서,
-     - 예: "대기업 투자 숫자 보도의 한계", "방위비 숫자 프레이밍", "노동·청년이 지워지는 방식" 등으로 구체적으로 써라.
+[4] 전체 언론사 지형과 패턴 정리
+- 언론사 이름(동아일보, 조선일보, 한겨레, 경향신문, 중앙일보, 한국일보 등)을 참고하여,
+  전체적으로 **보수/진보/중도/경제지** 지형이 어떻게 갈려 있는지 요약하라.
+- 특히 위에서 정리한 주제들에 대해,
+  - 친정부/반정부
+  - 친시장/반시장
+  - 동맹 강화 vs 비용·리스크 비판
+  - 노동·복지 이슈에 대한 태도
+  등의 축에서 어떤 패턴이 보이는지 정리한다.
+
+[5] 독자가 기사를 읽을 때 비판적으로 볼 포인트 3~5가지
+- 위에서 정리한 주제들을 바탕으로,
+  - 숫자 프레이밍의 한계
+  - 특정 이해당사자(정부·대기업·노동자·청년 등)의 '지워지는 방식'
+  - 국제 제도 vs 국내 주권/복지 사이의 긴장
+  등의 관점에서, 구체적인 체크 포인트 3~5개를 bullet 형식으로 제시하라.
+
+[중요 규칙]
+- 반드시 한국어로 작성한다.
+- 출력 안에서 [1], [2] 같은 대제목은 그대로 사용하되, (2)와 (3) 부분에 가장 공을 들여라.
+- 개별 기사 번호([기사 1] 등)는 다시 사용하지 말 것.
 
 [기사 요약들]
 {joined}
@@ -339,7 +353,106 @@ value는 그 주제에 속하는 기사 번호(N)의 정수 배열이다.
 
 
 # ----------------------------------------
-# 5) 텔레그램으로 결과 전송
+# 5) HTML 리포트 생성 (로컬에서 크게 보는 용도)
+# ----------------------------------------
+def build_html_report(
+    mode_label: str,
+    topic_map: Dict[str, List[int]],
+    summary_items: List[Dict],
+    analysis_body: str,
+    out_dir: str,
+) -> str:
+    """
+    - 텔레그램 텍스트와 동일한 내용을 조금 더 큰 화면에서 보기 위한 간단 HTML 리포트 생성.
+    - out_dir 안에 'final_report.html'을 생성하고 해당 경로를 반환.
+    """
+    idx_map = {item["index"]: item for item in summary_items}
+
+    html_parts: List[str] = []
+    html_parts.append("<!doctype html>")
+    html_parts.append("<html lang='ko'>")
+    html_parts.append("<head>")
+    html_parts.append("<meta charset='utf-8' />")
+    html_parts.append("<meta name='viewport' content='width=device-width, initial-scale=1' />")
+    html_parts.append("<title>신문 1면 분석 리포트</title>")
+    html_parts.append(
+        "<style>"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;"
+        "padding:16px;max-width:960px;margin:0 auto;line-height:1.6;}"
+        "h1{font-size:1.6rem;margin-bottom:0.5rem;}"
+        "h2{font-size:1.2rem;margin-top:1.4rem;border-bottom:1px solid #ddd;padding-bottom:0.2rem;}"
+        "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;}"
+        "pre{white-space:pre-wrap;background:#f7f7f7;padding:12px;border-radius:8px;}"
+        "section{margin-bottom:1.5rem;}"
+        "ul{padding-left:1.2rem;}"
+        "a{color:#0366d6;text-decoration:none;}"
+        "a:hover{text-decoration:underline;}"
+        "</style>"
+    )
+    html_parts.append("</head>")
+    html_parts.append("<body>")
+
+    html_parts.append("<header>")
+    html_parts.append("<h1>신문 1면 분석 리포트</h1>")
+    html_parts.append(f"<p><strong>모드:</strong> {html.escape(mode_label)}</p>")
+    html_parts.append("</header>")
+
+    # 주제별 기사 링크
+    html_parts.append("<section>")
+    html_parts.append("<h2>주제별 기사 링크</h2>")
+
+    if topic_map:
+        for topic_label in sorted(topic_map.keys()):
+            html_parts.append(f"<h3>{html.escape(topic_label)}</h3>")
+            html_parts.append("<ul>")
+            for idx in topic_map[topic_label]:
+                item = idx_map.get(idx)
+                if not item:
+                    continue
+                source = item.get("source", "언론사 미상")
+                url = item.get("url", "")
+                html_parts.append(
+                    f"<li>{html.escape(str(source))}: "
+                    f"<a href='{html.escape(url)}' target='_blank' rel='noopener noreferrer'>"
+                    f"{html.escape(url)}</a></li>"
+                )
+            html_parts.append("</ul>")
+    else:
+        html_parts.append("<p>주제별 분류에 실패하여 단순 링크 목록으로 대체되었습니다.</p>")
+        html_parts.append("<ul>")
+        for item in summary_items:
+            idx = item["index"]
+            source = item["source"]
+            url = item["url"]
+            html_parts.append(
+                f"<li>[{idx}] {html.escape(str(source))}: "
+                f"<a href='{html.escape(url)}' target='_blank' rel='noopener noreferrer'>"
+                f"{html.escape(url)}</a></li>"
+            )
+        html_parts.append("</ul>")
+
+    html_parts.append("</section>")
+
+    # 분석 본문
+    html_parts.append("<section>")
+    html_parts.append("<h2>분석</h2>")
+    escaped = html.escape(analysis_body)
+    html_parts.append(f"<pre>{escaped}</pre>")
+    html_parts.append("</section>")
+
+    html_parts.append("</body></html>")
+
+    html_text = "\n".join(html_parts)
+    html_path = os.path.join(out_dir, "final_report.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html_text)
+
+    log(f"[단계] HTML 리포트 파일 저장: {html_path}")
+    return html_path
+
+
+# ----------------------------------------
+# 6) 텔레그램으로 결과 전송
 #    - 길이 4096자 제한을 고려해 여러 메시지로 나눠서 전송
 # ----------------------------------------
 def send_telegram_message(text: str) -> None:
@@ -393,7 +506,7 @@ def send_telegram_message(text: str) -> None:
 
 
 # ----------------------------------------
-# 6) 전체 파이프라인
+# 7) 전체 파이프라인
 # ----------------------------------------
 def run_pipeline(
     url_file: str = "urls.txt",
@@ -474,10 +587,10 @@ def run_pipeline(
     mode_label = "테스트 (저비용: gpt-5-nano)" if test_mode else "일반 (고품질: 요약 gpt-5-mini, 분석 gpt-5.1)"
     header = f"[모드] {mode_label}\n"
 
-    # 링크 목록 생성 (주제별)
+    # 링크 목록 생성 (주제별) — 리포트 최상단으로 이동
     link_lines: List[str] = []
     if topic_map:
-        link_lines.append("[기사 링크 모음 (주제별)]")
+        link_lines.append("[주제별 기사 링크]")
         for topic_label in sorted(topic_map.keys()):
             link_lines.append(f"{topic_label}")
             # 같은 주제 안에서 언론사별로 묶기
@@ -490,7 +603,6 @@ def run_pipeline(
                 url = item["url"]
                 by_source.setdefault(source, []).append(url)
             for source, urls in by_source.items():
-                # 한 줄에 같은 언론사의 URL들을 , 로 붙여서 표현
                 joined_urls = ", ".join(urls)
                 link_lines.append(f"- {source}: {joined_urls}")
             link_lines.append("")  # 주제 간 빈 줄
@@ -504,16 +616,23 @@ def run_pipeline(
             link_lines.append(f"{idx}. [{source}] {url}")
 
     links_section = "\n".join(link_lines)
-    links_section = "\n\n----------\n" + links_section
 
-    final_report = header + "\n" + analysis_body + links_section
+    # 최종 텍스트 리포트:
+    # 1) [모드] 헤더
+    # 2) 주제별 기사 링크
+    # 3) 구분선
+    # 4) (2) 주제별 핵심 요약, (3) 언론사별 중요 포인트, (4)(5) 전체 해석/비판 포인트
+    final_report = header + "\n" + links_section + "\n\n----------\n" + analysis_body
 
-    # 최종 리포트 파일 저장
+    # 최종 리포트 텍스트 파일 저장
     report_path = os.path.join(out_dir, "final_report.txt")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(final_report)
 
     log(f"[단계] 최종 리포트 파일 저장: {report_path}")
+
+    # HTML 리포트 파일도 함께 생성 (로컬 브라우저에서 읽기 좋게)
+    build_html_report(mode_label, topic_map, summary_items, analysis_body, out_dir)
 
     # 텔레그램으로도 전송
     send_telegram_message(final_report)
