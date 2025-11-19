@@ -88,13 +88,19 @@ def collect_naver_news_links() -> List[Dict[str, str]]:
     all_items = []
     for press_name, press_code in PRESS_LIST:
         try:
-            url = BASE_NEWPAPER_URL.format(press=press_code, date=date)
+            # === [수정 부분 시작] ===
+            # f-string을 사용해 명확하게 URL 조합
+            url = f"https://media.naver.com/press/{press_code}/newspaper?date={date}".strip()
+            # === [수정 부분 끝] ===
+            
             html = fetch_html(url)
             links = extract_a1_links(html, url, press_code, date)
             for link in links:
                 all_items.append({"source": press_name, "url": link})
         except Exception as e:
+            # 에러 로그 출력 시 URL을 같이 출력하여 디버깅 용이하게 함
             print(f"  [에러] {press_name} 수집 실패: {e}")
+            print(f"  [URL] 요청 실패 URL: {url}") # URL 추가
     return all_items
 
 # ----------------------------------------
