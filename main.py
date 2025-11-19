@@ -213,7 +213,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
         # 1. 토큰 생성: URL 깨끗하게 유지 (방어적 수정 적용)
-        telegraph_account_url = "[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)"
+        telegraph_account_url = "https://api.telegra.ph/createAccount?short_name=NewsAI"
         print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
         
         r = requests.get(telegraph_account_url).json()
@@ -241,7 +241,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "return_content": False
         }
         # 2. 페이지 생성: URL 깨끗하게 유지 (방어적 수정 적용)
-        telegraph_create_page_url = "[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)"
+        telegraph_create_page_url = "https://api.telegra.ph/createPage"
         resp = requests.post(telegraph_create_page_url, data=data).json()
         
         if resp.get('ok'):
@@ -263,7 +263,7 @@ def send_telegram(message: str):
         
     # URL 구성: 문자열 연결 방식으로 변경하여 챗봇 오염 방어 (수정됨)
     # 텔레그램 토큰이 포함된 URL 문자열이 [로 시작하지 않도록 주의하십시오.
-    url = "[https://api.telegram.org/bot](https://api.telegram.org/bot)" + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    url = "https://api.telegram.org/bot + TELEGRAM_BOT_TOKEN + "/sendMessage"
     
     # 🚨 디버깅 코드 추가: URL 길이를 출력하고, 토큰이 삽입된 URL의 앞부분을 확인
     masked_url = url.replace(TELEGRAM_BOT_TOKEN, "***masked***")
