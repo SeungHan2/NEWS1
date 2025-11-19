@@ -261,5 +261,20 @@ def main():
     send_telegram(final_report)
     print("[INFO] 완료.")
 
+# main.py 맨 아래 실행 부분에 디버깅용 코드 추가
+
+if __name__ == "__main__":
+    # [디버깅] 사용 가능한 모델 리스트 출력
+    try:
+        print("=== [DEBUG] Available Models ===")
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(m.name)
+        print("================================")
+    except Exception as e:
+        print(f"[DEBUG] 모델 리스트 조회 실패: {e}")
+
+    main()
+
 if __name__ == "__main__":
     main()
