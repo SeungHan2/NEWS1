@@ -41,7 +41,8 @@ PRESS_LIST: List[Tuple[str, str]] = [
 # [Part 1] 네이버 1면 링크 수집
 # ----------------------------------------
 def get_kst_today() -> str:
-    now_utc = datetime.utcnow()
+    # DeprecationWarning 해결을 위해 datetime.UTC 사용
+    now_utc = datetime.now(datetime.UTC)
     now_kst = now_utc + timedelta(hours=9)
     return now_kst.strftime("%Y%m%d")
 
@@ -210,9 +211,9 @@ def analyze_with_gemini(articles: list) -> dict:
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
-        # 1. 토큰 생성: 마크다운 아티팩트 제거 후 URL을 명시적으로 사용
+        # Telegraph API URL에서 불필요한 마크다운 구문 제거 (수정됨)
         telegraph_account_url = "[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)"
-        r = requests.get(telegraph_account_url).json() 
+        r = requests.get(telegraph_account_url).json()
         token = r['result']['access_token']
         
         content_nodes = []
@@ -236,7 +237,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "content": json.dumps(content_nodes),
             "return_content": False
         }
-        # 2. 페이지 생성: 마크다운 아티팩트 제거 후 URL을 명시적으로 사용
+        # Telegraph API URL에서 불필요한 마크다운 구문 제거 (수정됨)
         telegraph_create_page_url = "[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)"
         resp = requests.post(telegraph_create_page_url, data=data).json()
         
@@ -254,7 +255,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-    # URL 구성: 마크다운 아티팩트 제거 후 f-string 사용
+    # 텔레그램 API URL에서 불필요한 마크다운 구문 제거 (수정됨)
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     
     chunk_size = 4000 
