@@ -15,9 +15,10 @@ from dotenv import load_dotenv
 # ----------------------------------------
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# .strip()을 추가하여 토큰이나 ID 앞뒤의 모든 공백/특수 문자를 제거합니다.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
