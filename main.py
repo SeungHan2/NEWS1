@@ -42,7 +42,7 @@ PRESS_LIST: List[Tuple[str, str]] = [
 # [Part 1] 네이버 1면 링크 수집
 # ----------------------------------------
 def get_kst_today() -> str:
-    # timezone.utc를 사용하여 Python 버전에 관계없이 UTC를 명확하게 지정 (수정됨)
+    # timezone.utc를 사용하여 Python 버전에 관계없이 UTC를 명확하게 지정
     now_utc = datetime.now(timezone.utc)
     now_kst = now_utc + timedelta(hours=9)
     return now_kst.strftime("%Y%m%d")
@@ -212,7 +212,7 @@ def analyze_with_gemini(articles: list) -> dict:
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
-        # 1. 토큰 생성: URL 깨끗하게 유지 및 디버깅 로그 추가
+        # 1. 토큰 생성: URL 깨끗하게 유지 (수정됨)
         telegraph_account_url = "[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)"
         print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
         
@@ -240,7 +240,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "content": json.dumps(content_nodes),
             "return_content": False
         }
-        # 2. 페이지 생성: URL 깨끗하게 유지
+        # 2. 페이지 생성: URL 깨끗하게 유지 (수정됨)
         telegraph_create_page_url = "[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)"
         resp = requests.post(telegraph_create_page_url, data=data).json()
         
@@ -262,7 +262,7 @@ def send_telegram(message: str):
         print("[WARNING] 텔레그램 토큰 또는 채팅 ID가 없어 전송을 건너뜁니다.")
         return
         
-    # URL 구성: URL 깨끗하게 유지
+    # URL 구성: URL 깨끗하게 유지 (수정됨)
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     
     # 🚨 디버깅 코드 추가: URL 길이를 출력하고, 토큰이 삽입된 URL의 앞부분을 확인
