@@ -22,6 +22,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# 모델명은 사용자의 로그에서 확인된 'gemini-2.0-flash'로 고정
+GEMINI_MODEL_NAME = 'gemini-2.0-flash' 
+
 PRESS_LIST: List[Tuple[str, str]] = [
     ("동아일보", "020"),
     ("한국일보", "469"),
@@ -30,7 +33,7 @@ PRESS_LIST: List[Tuple[str, str]] = [
     ("한겨레", "028"),
     ("경향신문", "032"),
 ]
-BASE_NEWPAPER_URL = "https://media.naver.com/press/{press}/newspaper?date={date}"
+BASE_NEWPAPER_URL = "[https://media.naver.com/press/](https://media.naver.com/press/){press}/newspaper?date={date}"
 
 # ----------------------------------------
 # [Part 1] 네이버 1면 링크 수집
@@ -126,11 +129,11 @@ def fetch_contents_parallel(items: list) -> list:
 # [Part 3] Gemini 분석 (리포트 작성)
 # ----------------------------------------
 def analyze_with_gemini(articles: list) -> dict:
-    print("[INFO] Gemini 2.0 Flash 분석 요청 시작...")
+    print(f"[INFO] {GEMINI_MODEL_NAME} 분석 요청 시작...")
     
-    # 모델명을 환경에 맞게 수정 (사용자 로그 기반: gemini-2.0-flash)
     model = genai.GenerativeModel(
-        model_name='gemini-2.0-flash',
+        model_name=GEMINI_MODEL_NAME,
+        # JSON 출력을 강제하여 파싱을 용이하게 함
         generation_config={"response_mime_type": "application/json"}
     )
 
@@ -138,6 +141,7 @@ def analyze_with_gemini(articles: list) -> dict:
     for i, art in enumerate(articles):
         articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
+    # 통합 기사 분량 및 상세 요구사항 강화 프롬프트
     prompt = f"""
     너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
     
@@ -145,7 +149,7 @@ def analyze_with_gemini(articles: list) -> dict:
     1. 기사들을 유사한 주제(정치, 경제, 사회 등)로 그룹화하라.
     2. **주제별 통합 기사 작성**: 각 주제에 대해 개별 기사를 단순히 나열하지 말고, 모든 내용을 종합하여 **하나의 완결된 심층 기사**로 새로 써라.
         - **분량**: 반드시 **최소 500자 이상**의 상세한 글로 작성할 것.
-        - **구성**: 기사의 배경, 현재 상황, 언론사별 주요 주장(A신문은 긍정적, B신문은 부정적 등), 그리고 향후 전망이나 전문가 분석 등 **다각도의 관점**을 포함하여 작성할 것.
+        - **구성**: 기사의 배경, 현재 상황, 언론사별 주요 주장, 그리고 향후 전망이나 전문가 분석 등 다각도의 관점을 포함하여 작성할 것.
         - **톤**: 전문가가 작성한 객관적인 논조의 기사 형태를 유지할 것.
     3. **요약본(Bullets)**: 바쁜 독자를 위해, 통합 기사의 내용을 3줄 이내의 핵심 단문(Bullet point)으로 요약하라.
     4. 결과는 반드시 JSON 형식이어야 한다.
@@ -166,44 +170,36 @@ def analyze_with_gemini(articles: list) -> dict:
     {articles_text}
     """
 
+    response = None # response 변수 정의
 
     try:
         response = model.generate_content(prompt)
-        return json.loads(response.text)
+        raw_text = response.text.strip()
+        
+        # JSON 응답을 감싸는 마크다운 코드 블록 제거 (JSON 파싱 오류 방지)
+        if raw_text.startswith('```json'):
+            raw_text = raw_text.removeprefix('```json').removesuffix('```').strip()
+        
+        return json.loads(raw_text)
+        
+    except json.JSONDecodeError as e:
+        # JSON 디코딩 실패 시: 모델이 생성한 원본 텍스트를 출력
+        print(f"[CRITICAL ERROR] JSON 디코딩 실패: {e}")
+        print("--- Gemini Raw Output Start ---")
+        if response:
+            print(response.text)
+        else:
+            print("No response object available.")
+        print("--- Gemini Raw Output End ---")
+        return {"topics": []} # 실패했으므로 빈 리스트 반환
+    
     except Exception as e:
-        print(f"[에러] Gemini 분석 실패: {e}")
+        print(f"[CRITICAL ERROR] Gemini 분석 중 기타 에러 발생: {e}")
         return {"topics": []}
 
 # ----------------------------------------
 # [Part 4] Telegraph 페이지 생성 (웹뷰)
 # ----------------------------------------
-def create_telegraph_page(title: str, html_content: str) -> str:
-    """Telegra.ph에 페이지를 생성하고 URL 반환"""
-    try:
-        # 1. 계정 생성 (1회용 토큰)
-        auth_resp = requests.get("https://api.telegra.ph/createAccount?short_name=NewsBot&author_name=MorningBriefing").json()
-        access_token = auth_resp['result']['access_token']
-
-        # 2. 페이지 생성
-        # Telegraph는 Node 형식을 요구하지만, 편의상 간단한 텍스트/링크 구조로 변환
-        payload = {
-            "access_token": access_token,
-            "title": title,
-            "content": json.dumps([{"tag": "p", "children": ["(아래 내용은 AI가 신문 1면을 종합한 것입니다)"]}, 
-                                   {"tag": "hr"}, 
-                                   {"tag": "div", "children": [html_content]}])
-        }
-        
-        # 간단한 HTML -> Node 변환 로직이 없으므로, 텍스트를 통째로 넣는 꼼수 대신
-        # 텔레그램 봇으로 보낼 때는 직접 HTML 태그를 지원하므로, 
-        # 여기서는 사용자가 '웹에서 보기'를 눌렀을 때 깔끔한 텍스트를 보여주기 위해
-        # Python 내부에서 리스트를 Node로 변환하는 간단한 매퍼가 필요합니다.
-        # 하지만 복잡성을 줄이기 위해 여기서는 '제목'과 '본문'을 합친 텍스트를 보냅니다.
-        
-        return "https://telegra.ph/" # 실패 시 기본값 (실제 구현은 복잡하므로 아래 메인 로직에서 대체)
-    except:
-        return ""
-
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
@@ -213,9 +209,23 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
         
         # 2. 줄바꿈을 Node로 변환
         content_nodes = []
+        # 제목을 H3 태그로 추가 (웹뷰 가독성 개선)
+        content_nodes.append({"tag": "h3", "children": ["AI 통합 리포트"]})
+        
+        current_p_children = []
         for line in text_body.split('\n'):
-            if line.strip():
-                content_nodes.append({"tag": "p", "children": [line.strip()]})
+            line = line.strip()
+            if not line and current_p_children:
+                # 빈 줄일 경우 이전 내용을 p 태그로 묶고 초기화
+                content_nodes.append({"tag": "p", "children": current_p_children})
+                current_p_children = []
+            elif line:
+                # 텍스트가 있는 경우 추가 (하이퍼링크 처리 로직은 생략)
+                current_p_children.append(line)
+        
+        # 마지막 남은 내용 처리
+        if current_p_children:
+            content_nodes.append({"tag": "p", "children": current_p_children})
         
         data = {
             "access_token": token,
@@ -224,7 +234,12 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "return_content": False
         }
         resp = requests.post("https://api.telegra.ph/createPage", data=data).json()
-        return resp['result']['url']
+        
+        if resp.get('ok'):
+            return resp['result']['url']
+        else:
+            print(f"Telegraph API 오류: {resp.get('error')}")
+            return ""
     except Exception as e:
         print(f"Telegraph 생성 실패: {e}")
         return ""
@@ -236,14 +251,13 @@ def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # 메시지가 길면 나누기
     chunk_size = 4000 
     for i in range(0, len(message), chunk_size):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID, 
             "text": message[i:i+chunk_size], 
             "parse_mode": "HTML", # 링크 하이퍼텍스트를 위해 HTML 사용
-            "disable_web_page_preview": True
+            "disable_web_page_preview": True # 웹페이지 미리보기 비활성화
         }
         requests.post(url, data=payload)
         time.sleep(0.5)
@@ -254,7 +268,9 @@ def send_telegram(message: str):
 def main():
     # 1. 링크 수집 및 통계
     links = collect_naver_news_links()
-    if not links: return
+    if not links: 
+        print("수집된 기사가 없어 종료합니다.")
+        return
 
     # 언론사별 수량 카운트
     stats = {}
@@ -268,7 +284,10 @@ def main():
     contents = fetch_contents_parallel(links)
 
     # 3. Gemini 분석
-    if not GEMINI_API_KEY: return
+    if not GEMINI_API_KEY: 
+        print("API 키가 없어 분석을 생략합니다.")
+        return
+    
     result = analyze_with_gemini(contents)
     
     # 4. 리포트 및 웹뷰 컨텐츠 생성
@@ -279,50 +298,56 @@ def main():
     telegram_msg += f"📊 <b>수집 현황:</b> {header_stats}\n\n"
     
     # 웹뷰용 전체 텍스트
-    webview_text = f"{today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
+    webview_text = f"📰 {today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
 
     topics = result.get("topics", [])
-    for topic in topics:
-        title = topic.get('title', '무제')
-        ids = topic.get('ids', [])
-        bullets = topic.get('summary_bullets', [])
-        full_article = topic.get('full_article', '')
+    
+    if not topics:
+        # JSON 파싱 실패로 topics가 없을 경우, 기본 메시지 추가
+        telegram_msg += "<b>⚠️ 리포트 생성 실패: 분석 과정에서 오류가 발생했거나, AI가 답변을 거부했습니다. GitHub Actions 로그를 확인하세요.</b>"
+        webview_text = "리포트 생성 실패"
+    else:
+        for topic in topics:
+            title = topic.get('title', '무제')
+            ids = topic.get('ids', [])
+            bullets = topic.get('summary_bullets', [])
+            full_article = topic.get('full_article', '')
 
-        # --- 텔레그램 메시지 구성 ---
-        # 제목 + 기사 수
-        telegram_msg += f"━━━━━━━━━━━━━━\n"
-        telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
-        
-        # 하이퍼링크 생성 (가독성 개선)
-        link_tags = []
-        for idx in ids:
-            if idx < len(contents):
-                item = contents[idx]
-                # <a href="url">언론사</a> 형태
-                link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
-        telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
-        
-        # 요약 불렛 포인트
-        for bullet in bullets:
-            telegram_msg += f"• {bullet}\n"
-        telegram_msg += "\n"
+            # --- 텔레그램 메시지 구성 ---
+            # 제목 + 기사 수
+            telegram_msg += f"━━━━━━━━━━━━━━\n"
+            telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
+            
+            # 하이퍼링크 생성 (가독성 개선)
+            link_tags = []
+            for idx in ids:
+                if idx < len(contents):
+                    item = contents[idx]
+                    # <a href="url">언론사</a> 형태
+                    link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
+            telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
+            
+            # 요약 불렛 포인트
+            for bullet in bullets:
+                # 텔레그램에서는 • 대신 HTML 엔티티를 사용하여 더 안전하게 표시
+                telegram_msg += f"• {bullet}\n"
+            telegram_msg += "\n"
 
-        # --- 웹뷰 텍스트 구성 ---
-        webview_text += f"### {title} ({len(ids)}건)\n"
-        webview_text += "====================\n"
-        webview_text += "[핵심 요약]\n"
-        for bullet in bullets:
-            webview_text += f"- {bullet}\n"
-        webview_text += "\n[통합 기사]\n"
-        webview_text += f"{full_article}\n\n"
-        webview_text += "\n"
+            # --- 웹뷰 텍스트 구성 ---
+            webview_text += f"\n### 📌 {title} ({len(ids)}건)\n"
+            webview_text += "\n[핵심 요약]\n"
+            for bullet in bullets:
+                webview_text += f" - {bullet}\n"
+            webview_text += "\n[통합 심층 기사]\n"
+            webview_text += f"{full_article}\n"
+            webview_text += "\n\n"
 
     # 5. Telegraph 페이지 생성 (긴 화면용)
     webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
     
     # 텔레그램 메시지 하단에 링크 추가
     if webview_url:
-        telegram_msg += f"\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
+        telegram_msg += f"\n\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
 
     # 6. 전송
     print("[INFO] 텔레그램 전송 중...")
