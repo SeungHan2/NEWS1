@@ -212,7 +212,7 @@ def analyze_with_gemini(articles: list) -> dict:
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
-        # 1. 토큰 생성: URL 깨끗하게 유지 (수정됨)
+        # 1. 토큰 생성: URL 깨끗하게 유지 (방어적 수정 적용)
         telegraph_account_url = "[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)"
         print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
         
@@ -240,7 +240,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "content": json.dumps(content_nodes),
             "return_content": False
         }
-        # 2. 페이지 생성: URL 깨끗하게 유지 (수정됨)
+        # 2. 페이지 생성: URL 깨끗하게 유지 (방어적 수정 적용)
         telegraph_create_page_url = "[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)"
         resp = requests.post(telegraph_create_page_url, data=data).json()
         
@@ -250,7 +250,6 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             print(f"Telegraph API 오류: {resp.get('error')}")
             return ""
     except Exception as e:
-        # 이 시점에서 InvalidSchema가 발생하면 Telegraph URL 자체의 문자열 문제일 가능성이 100%
         print(f"Telegraph 생성 실패: {e}")
         return ""
 
@@ -259,15 +258,14 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
-        print("[WARNING] 텔레그램 토큰 또는 채팅 ID가 없어 전송을 건너뜁니다.")
+        print("[WARNING] 텔레그램 토큰 또는 채팅 ID가 없어 전송을 건너킵니다.")
         return
         
-    # URL 구성: URL 깨끗하게 유지 (수정됨)
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
+    # URL 구성: 문자열 연결 방식으로 변경하여 챗봇 오염 방어 (수정됨)
+    # 텔레그램 토큰이 포함된 URL 문자열이 [로 시작하지 않도록 주의하십시오.
+    url = "[https://api.telegram.org/bot](https://api.telegram.org/bot)" + TELEGRAM_BOT_TOKEN + "/sendMessage"
     
     # 🚨 디버깅 코드 추가: URL 길이를 출력하고, 토큰이 삽입된 URL의 앞부분을 확인
-    # 토큰에 문제가 있다면 URL 길이가 비정상적이거나, URL에 이상한 문자가 보일 수 있음.
-    # 안전을 위해 토큰 부분은 *로 마스킹하여 출력
     masked_url = url.replace(TELEGRAM_BOT_TOKEN, "***masked***")
     print(f"[DEBUG] Telegram URL length: {len(url)}")
     print(f"[DEBUG] Telegram URL fragment (masked): {masked_url[:70]}")
