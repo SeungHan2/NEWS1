@@ -2,7 +2,8 @@ import os
 import time
 import json
 import requests
-from datetime import datetime, timedelta
+# timezone 임포트 추가 (Python 버전 호환성 확보)
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 from typing import List, Tuple, Dict
 from bs4 import BeautifulSoup
@@ -41,8 +42,8 @@ PRESS_LIST: List[Tuple[str, str]] = [
 # [Part 1] 네이버 1면 링크 수집
 # ----------------------------------------
 def get_kst_today() -> str:
-    # DeprecationWarning 해결을 위해 datetime.UTC 사용
-    now_utc = datetime.now(datetime.UTC)
+    # timezone.utc를 사용하여 Python 버전에 관계없이 UTC를 명확하게 지정 (수정됨)
+    now_utc = datetime.now(timezone.utc)
     now_kst = now_utc + timedelta(hours=9)
     return now_kst.strftime("%Y%m%d")
 
@@ -211,7 +212,7 @@ def analyze_with_gemini(articles: list) -> dict:
 def create_telegraph_simple(title: str, text_body: str) -> str:
     """간단한 텍스트 기반 Telegraph 페이지 생성"""
     try:
-        # Telegraph API URL에서 불필요한 마크다운 구문 제거 (수정됨)
+        # 1. 토큰 생성: URL 깨끗하게 유지
         telegraph_account_url = "[https://api.telegra.ph/createAccount?short_name=NewsAI](https://api.telegra.ph/createAccount?short_name=NewsAI)"
         r = requests.get(telegraph_account_url).json()
         token = r['result']['access_token']
@@ -237,7 +238,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
             "content": json.dumps(content_nodes),
             "return_content": False
         }
-        # Telegraph API URL에서 불필요한 마크다운 구문 제거 (수정됨)
+        # 2. 페이지 생성: URL 깨끗하게 유지
         telegraph_create_page_url = "[https://api.telegra.ph/createPage](https://api.telegra.ph/createPage)"
         resp = requests.post(telegraph_create_page_url, data=data).json()
         
@@ -255,7 +256,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-    # 텔레그램 API URL에서 불필요한 마크다운 구문 제거 (수정됨)
+    # URL 구성: URL 깨끗하게 유지
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     
     chunk_size = 4000 
