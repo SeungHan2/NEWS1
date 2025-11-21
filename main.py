@@ -162,6 +162,7 @@ def analyze_with_gpt(articles: list) -> dict:
     for i, art in enumerate(articles):
         articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
+    # 프롬프트에서 JSON 형식 강하게 요구
     prompt = f"""
     너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
 
@@ -172,7 +173,8 @@ def analyze_with_gpt(articles: list) -> dict:
         - **구성**: 기사의 배경, 현재 상황, 언론사별 주요 주장, 그리고 향후 전망이나 전문가 분석 등 다각도의 관점을 포함하여 작성할 것.
         - **톤**: 전문가가 작성한 객관적인 논조의 기사 형태를 유지할 것.
     3. **요약본(Bullets)**: 바쁜 독자를 위해, 통합 기사의 내용을 3줄 이내의 핵심 단문(Bullet point)으로 요약하라.
-    4. 결과는 반드시 JSON 형식이어야 한다.
+    4. 아래 JSON 스키마를 **반드시 그대로 따르는 유효한 JSON 문자열만** 출력하라.
+       - JSON 밖의 다른 텍스트(설명, 마크다운, 코드블록 등)는 절대 출력하지 마라.
 
     [JSON 구조]
     {{
@@ -192,11 +194,10 @@ def analyze_with_gpt(articles: list) -> dict:
 
     response = None
     try:
-        # JSON 모드 사용
+        # 🔴 여기에서 더 이상 response_format 인자를 사용하지 않는다
         response = client.responses.create(
             model=GPT_MODEL_NAME,
             input=prompt,
-            response_format={"type": "json_object"},
         )
 
         # OpenAI responses 구조에서 텍스트 추출
@@ -205,17 +206,16 @@ def analyze_with_gpt(articles: list) -> dict:
             raw_text = response.output[0].content[0].text.strip()
         except Exception as e:
             print(f"[WARN] response.output에서 텍스트 추출 실패, fallback 시도: {e}")
-            # 혹시 다른 필드가 있을 경우를 대비한 fallback
             if hasattr(response, "output_text"):
                 raw_text = response.output_text.strip()
             else:
-                raw_text = str(response)
+                raw_text = str(response).strip()
 
-        # ```json ``` 코드블록 제거
+        # 혹시라도 ```json ``` 등 코드블록으로 감싸져 있으면 제거
         if raw_text.startswith("```json"):
             raw_text = raw_text.removeprefix("```json").removesuffix("```").strip()
         elif raw_text.startswith("```"):
-            raw_text = raw_text.removesuffix("```").removeprefix("```").strip()
+            raw_text = raw_text.removeprefix("```").removesuffix("```").strip()
 
         return json.loads(raw_text)
 
@@ -231,9 +231,11 @@ def analyze_with_gpt(articles: list) -> dict:
             print("No response object available.")
         print("--- GPT Raw Output End ---")
         return {"topics": []}
+
     except Exception as e:
         print(f"[CRITICAL ERROR] GPT 분석 중 기타 에러 발생: {e}")
         return {"topics": []}
+
 
 # ----------------------------------------
 # [Part 4] Telegraph 페이지 생성 (웹뷰)
