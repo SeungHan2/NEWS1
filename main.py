@@ -39,7 +39,7 @@ if not OPENAI_API_KEY:
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 사용할 GPT 모델 (원하면 환경변수로 빼도 됨)
-GPT_MODEL_NAME = os.getenv("GPT_MODEL_NAME", "GPT-5-mini").strip()
+GPT_MODEL_NAME = os.getenv("GPT_MODEL_NAME", "gpt-5-mini").strip()
 
 
 PRESS_LIST: List[Tuple[str, str]] = [
