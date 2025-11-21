@@ -173,7 +173,11 @@ def analyze_with_gpt(articles: list) -> dict:
         - **구성**: 기사의 배경, 현재 상황, 언론사별 주요 주장, 그리고 향후 전망이나 전문가 분석 등 다각도의 관점을 포함하여 작성할 것.
         - **톤**: 전문가가 작성한 객관적인 논조의 기사 형태를 유지할 것.
     3. **요약본(Bullets)**: 바쁜 독자를 위해, 통합 기사의 내용을 3줄 이내의 핵심 단문(Bullet point)으로 요약하라.
-    4. 아래 JSON 스키마를 **반드시 그대로 따르는 유효한 JSON 문자열만** 출력하라.
+    4. **언론사별 비판/논조 정리**:
+        - 각 주제에 포함된 기사들의 언론사(조선일보, 한겨레 등)를 기준으로
+        - 그 언론사가 무엇을 비판/우려/옹호했는지 한두 문장으로 요약하라.
+        - 비판 뿐 아니라, 긍정/옹호/우려/중립 등 논조도 함께 파악해서 정리해도 된다.
+    5. 아래 JSON 스키마를 **반드시 그대로 따르는 유효한 JSON 문자열만** 출력하라.
        - JSON 밖의 다른 텍스트(설명, 마크다운, 코드블록 등)는 절대 출력하지 마라.
 
     [JSON 구조]
@@ -183,7 +187,19 @@ def analyze_with_gpt(articles: list) -> dict:
                 "title": "주제 제목 (예: 금투세 폐지 논란 가열)",
                 "ids": [0, 2, 5],
                 "summary_bullets": ["핵심 내용 1", "핵심 내용 2"],
-                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(줄글로 작성). 500자 이상을 채우도록 노력해야 한다."
+                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(줄글로 작성). 500자 이상을 채우도록 노력해야 한다.",
+                "press_critiques": [
+                    {{
+                        "source": "조선일보",
+                        "position": "정부의 재정 지출 확대가 장기적으로 국가 부채를 악화시킨다는 점을 비판.",
+                        "tone": "비판적"
+                    }},
+                    {{
+                        "source": "한겨레",
+                        "position": "복지 확충의 필요성을 강조하며 재정 건전성 논란이 과장됐다고 지적.",
+                        "tone": "긍정적"
+                    }}
+                ]
             }}
         ]
     }}
@@ -241,7 +257,7 @@ def analyze_with_gpt(articles: list) -> dict:
 # [Part 4] Telegraph 페이지 생성 (웹뷰)
 # ----------------------------------------
 def create_telegraph_simple(title: str, text_body: str) -> str:
-    """간단한 텍스트 기반 Telegraph 페이지 생성"""
+    """간단한 텍스트 기반 Telegraph 페이지 생성 (줄 단위로 분리해서 가독성 개선)"""
     try:
         telegraph_account_url = "https://api.telegra.ph/createAccount?short_name=NewsAI"
         print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
@@ -250,19 +266,36 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
         token = r["result"]["access_token"]
 
         content_nodes = []
+        # 상단 큰 제목
         content_nodes.append({"tag": "h3", "children": ["AI 통합 리포트"]})
 
-        current_p_children = []
-        for line in text_body.split("\n"):
-            line = line.strip()
-            if not line and current_p_children:
-                content_nodes.append({"tag": "p", "children": current_p_children})
-                current_p_children = []
-            elif line:
-                current_p_children.append(line)
+        # text_body를 줄 단위로 읽어서 각각 블록으로 넣기
+        for raw_line in text_body.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue  # 완전히 빈 줄은 건너뛴다
 
-        if current_p_children:
-            content_nodes.append({"tag": "p", "children": current_p_children})
+            # 섹션 헤더: "### " 로 시작하는 줄 → h4
+            if line.startswith("### "):
+                content_nodes.append({
+                    "tag": "h4",
+                    "children": [line[4:]]  # "### " 제거
+                })
+            # 대괄호로 둘러싼 섹션 라벨 → 굵게
+            elif line.startswith("[") and line.endswith("]"):
+                content_nodes.append({
+                    "tag": "p",
+                    "children": [{
+                        "tag": "b",
+                        "children": [line]
+                    }]
+                })
+            # 그 외 모든 줄은 일반 문단
+            else:
+                content_nodes.append({
+                    "tag": "p",
+                    "children": [line]
+                })
 
         data = {
             "access_token": token,
@@ -282,6 +315,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
     except Exception as e:
         print(f"Telegraph 생성 실패: {e}")
         return ""
+
 
 # ----------------------------------------
 # [Part 5] 텔레그램 전송 (HTML 모드)
@@ -356,11 +390,13 @@ def main():
             ids = topic.get("ids", [])
             bullets = topic.get("summary_bullets", [])
             full_article = topic.get("full_article", "")
+            press_critiques = topic.get("press_critiques", [])
 
             # --- 텔레그램 메시지 구성 ---
             telegram_msg += f"━━━━━━━━━━━━━━\n"
             telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
 
+            # 기사 링크 모음
             link_tags = []
             for idx in ids:
                 if idx < len(contents):
@@ -368,18 +404,45 @@ def main():
                     link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
             telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
 
+            # 핵심 요약
             for bullet in bullets:
                 telegram_msg += f"• {bullet}\n"
             telegram_msg += "\n"
 
+            # 🔍 언론사별 비판/논조 요약 (간단 버전)
+            if press_critiques:
+                telegram_msg += "📰 <b>언론사별 비판/논조</b>\n"
+                for pc in press_critiques:
+                    src = pc.get("source", "")
+                    pos = pc.get("position", "")
+                    if src and pos:
+                        telegram_msg += f"- {src}: {pos}\n"
+                telegram_msg += "\n"
+
             # --- 웹뷰 텍스트 구성 ---
             webview_text += f"\n### 📌 {title} ({len(ids)}건)\n"
+
             webview_text += "\n[핵심 요약]\n"
             for bullet in bullets:
                 webview_text += f" - {bullet}\n"
+
             webview_text += "\n[통합 심층 기사]\n"
             webview_text += f"{full_article}\n"
+
+            # 웹뷰용 언론사별 비판/논조
+            if press_critiques:
+                webview_text += "\n[언론사별 비판/논조]\n"
+                for pc in press_critiques:
+                    src = pc.get("source", "")
+                    pos = pc.get("position", "")
+                    tone = pc.get("tone", "")
+                    if tone:
+                        webview_text += f" - {src}: ({tone}) {pos}\n"
+                    else:
+                        webview_text += f" - {src}: {pos}\n"
+
             webview_text += "\n\n"
+
 
     # 5. Telegraph 페이지 생성 (긴 화면용)
     webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
