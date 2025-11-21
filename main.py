@@ -158,11 +158,12 @@ def analyze_with_gpt(articles: list) -> dict:
 
     print(f"[INFO] {GPT_MODEL_NAME} 분석 요청 시작...")
 
+    # 기사 본문 모으기
     articles_text = ""
     for i, art in enumerate(articles):
         articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
-    # 프롬프트에서 JSON 형식 강하게 요구
+    # 🔻 여기 프롬프트는 이전에 쓰던 것 / 내가 준 확장 버전 아무거나 써도 됨
     prompt = f"""
     너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
 
@@ -208,43 +209,47 @@ def analyze_with_gpt(articles: list) -> dict:
     {articles_text}
     """
 
-    response = None
     try:
-        # 🔴 여기에서 더 이상 response_format 인자를 사용하지 않는다
+        # responses API 호출 (gpt-5-mini 포함)
         response = client.responses.create(
             model=GPT_MODEL_NAME,
             input=prompt,
         )
 
-        # OpenAI responses 구조에서 텍스트 추출
-        raw_text = ""
-        try:
-            raw_text = response.output[0].content[0].text.strip()
-        except Exception as e:
-            print(f"[WARN] response.output에서 텍스트 추출 실패, fallback 시도: {e}")
-            if hasattr(response, "output_text"):
-                raw_text = response.output_text.strip()
-            else:
+        # ✅ 1순위: 새로운 responses 객체는 output_text에 전체 문자열을 담고 있음
+        raw_text = getattr(response, "output_text", None)
+        if raw_text:
+            raw_text = raw_text.strip()
+        else:
+            # ✅ 2순위: output 배열 구조가 있을 때
+            try:
+                if getattr(response, "output", None):
+                    first_output = response.output[0]
+                    if first_output and first_output.content:
+                        raw_text = first_output.content[0].text.strip()
+                else:
+                    # ✅ 3순위: dict 비슷한 형태일 수 있으니 문자열로 변환
+                    raw_text = str(response).strip()
+            except Exception as e:
+                print(f"[WARN] 응답 파싱 중 경고 (fallback 사용): {e}")
                 raw_text = str(response).strip()
 
-        # 혹시라도 ```json ``` 등 코드블록으로 감싸져 있으면 제거
+        # 코드블록 제거 (혹시라도 붙을 경우)
         if raw_text.startswith("```json"):
             raw_text = raw_text.removeprefix("```json").removesuffix("```").strip()
         elif raw_text.startswith("```"):
             raw_text = raw_text.removeprefix("```").removesuffix("```").strip()
 
+        # 최종 JSON 파싱
         return json.loads(raw_text)
 
     except json.JSONDecodeError as e:
         print(f"[CRITICAL ERROR] JSON 디코딩 실패: {e}")
         print("--- GPT Raw Output Start ---")
-        if response is not None:
-            try:
-                print(response.output[0].content[0].text)
-            except Exception:
-                print(str(response))
-        else:
-            print("No response object available.")
+        try:
+            print(raw_text)
+        except Exception:
+            print("raw_text를 출력할 수 없습니다.")
         print("--- GPT Raw Output End ---")
         return {"topics": []}
 
