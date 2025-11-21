@@ -1,4 +1,4 @@
-google-generativeai>=0.8.3
+openai>=1.55.0
 requests
 beautifulsoup4
 python-dotenv
