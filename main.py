@@ -15,18 +15,32 @@ from dotenv import load_dotenv
 # ----------------------------------------
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+def get_openai_api_key() -> str:
+    """
+    OPENAI_API_KEY 환경변수를 읽어서 공백 제거 후 리턴.
+    (로컬 .env / GitHub Actions env 둘 다 여기로 들어옴)
+    """
+    key = os.getenv("OPENAI_API_KEY", "")
+    return key.strip()
+
+OPENAI_API_KEY = get_openai_api_key()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
+if not OPENAI_API_KEY:
+    # 여기서 바로 죽여버리면, GitHub Actions 로그에서 원인을 바로 알 수 있음
+    raise SystemExit(
+        "[ERROR] OPENAI_API_KEY 환경변수가 비어 있습니다.\n"
+        " - 로컬: .env 파일에 OPENAI_API_KEY=... 추가\n"
+        " - GitHub Actions: workflow yml에서 env: OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 로 전달 필요"
+    )
+
 # OpenAI 클라이언트 초기화
-client = None
-if OPENAI_API_KEY:
-    # api_key를 명시적으로 넣어도 되고, 환경변수만 써도 됨
-    client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 사용할 GPT 모델 (원하면 환경변수로 빼도 됨)
 GPT_MODEL_NAME = os.getenv("GPT_MODEL_NAME", "gpt-4.1-mini").strip()
+
 
 PRESS_LIST: List[Tuple[str, str]] = [
     ("동아일보", "020"),
