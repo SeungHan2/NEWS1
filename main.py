@@ -163,7 +163,6 @@ def analyze_with_gpt(articles: list) -> dict:
     for i, art in enumerate(articles):
         articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
-    # 🔻 여기 프롬프트는 이전에 쓰던 것 / 내가 준 확장 버전 아무거나 써도 됨
     prompt = f"""
     너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
 
@@ -210,25 +209,21 @@ def analyze_with_gpt(articles: list) -> dict:
     """
 
     try:
-        # responses API 호출 (gpt-5-mini 포함)
         response = client.responses.create(
             model=GPT_MODEL_NAME,
             input=prompt,
         )
 
-        # ✅ 1순위: 새로운 responses 객체는 output_text에 전체 문자열을 담고 있음
         raw_text = getattr(response, "output_text", None)
         if raw_text:
             raw_text = raw_text.strip()
         else:
-            # ✅ 2순위: output 배열 구조가 있을 때
             try:
                 if getattr(response, "output", None):
                     first_output = response.output[0]
                     if first_output and first_output.content:
                         raw_text = first_output.content[0].text.strip()
                 else:
-                    # ✅ 3순위: dict 비슷한 형태일 수 있으니 문자열로 변환
                     raw_text = str(response).strip()
             except Exception as e:
                 print(f"[WARN] 응답 파싱 중 경고 (fallback 사용): {e}")
@@ -240,7 +235,6 @@ def analyze_with_gpt(articles: list) -> dict:
         elif raw_text.startswith("```"):
             raw_text = raw_text.removeprefix("```").removesuffix("```").strip()
 
-        # 최종 JSON 파싱
         return json.loads(raw_text)
 
     except json.JSONDecodeError as e:
@@ -267,7 +261,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
         telegraph_account_url = "https://api.telegra.ph/createAccount?short_name=NewsAI"
         print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
 
-        r = requests.get(telegraph_account_url).json()
+        r = requests.get(telegraph_account_url, timeout=10).json()
         token = r["result"]["access_token"]
 
         content_nodes = []
@@ -310,7 +304,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
         }
 
         telegraph_create_page_url = "https://api.telegra.ph/createPage"
-        resp = requests.post(telegraph_create_page_url, data=data).json()
+        resp = requests.post(telegraph_create_page_url, data=data, timeout=10).json()
 
         if resp.get("ok"):
             return resp["result"]["url"]
@@ -323,29 +317,69 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 
 
 # ----------------------------------------
-# [Part 5] 텔레그램 전송 (HTML 모드)
+# [Part 5] 텔레그램 전송 (HTML 모드) + 응답 로깅/에러 처리 강화
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[WARNING] 텔레그램 토큰 또는 채팅 ID가 없어 전송을 건너킵니다.")
+        print(f"  TELEGRAM_BOT_TOKEN 설정 여부: {bool(TELEGRAM_BOT_TOKEN)}")
+        print(f"  TELEGRAM_CHAT_ID 값: {repr(TELEGRAM_CHAT_ID)}")
         return
 
-    url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
     masked_url = url.replace(TELEGRAM_BOT_TOKEN, "***masked***")
     print(f"[DEBUG] Telegram URL length: {len(url)}")
-    print(f"[DEBUG] Telegram URL fragment (masked): {masked_url[:70]}")
+    print(f"[DEBUG] Telegram URL fragment (masked): {masked_url[:80]}")
+    print(f"[DEBUG] Telegram CHAT_ID: {TELEGRAM_CHAT_ID}")
 
     chunk_size = 4000
-    for i in range(0, len(message), chunk_size):
+    total_len = len(message)
+    print(f"[DEBUG] Telegram message length: {total_len}, chunk_size: {chunk_size}")
+
+    chunk_index = 0
+    for i in range(0, total_len, chunk_size):
+        chunk_index += 1
+        chunk_text = message[i : i + chunk_size]
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": message[i : i + chunk_size],
+            "text": chunk_text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-        requests.post(url, data=payload)
+
+        print(f"[DEBUG] Sending chunk {chunk_index}, size={len(chunk_text)}")
+
+        try:
+            resp = requests.post(url, data=payload, timeout=10)
+        except Exception as e:
+            print(f"[ERROR] Telegram 요청 예외 발생 (chunk {chunk_index}): {e}")
+            # GitHub Actions 에서 실패로 표시되도록 종료
+            raise SystemExit(f"[FATAL] Telegram 요청 실패 (chunk {chunk_index}): {e}")
+
+        print(f"[DEBUG] Telegram status (chunk {chunk_index}): {resp.status_code}")
+
+        # 응답 내용 찍기
+        try:
+            data = resp.json()
+            print(f"[DEBUG] Telegram response json (chunk {chunk_index}): {data}")
+        except Exception:
+            data = None
+            print(f"[DEBUG] Telegram response text (chunk {chunk_index}): {resp.text}")
+
+        # 에러 처리
+        if resp.status_code != 200 or not (isinstance(data, dict) and data.get("ok", False)):
+            print(f"[ERROR] Telegram send failed (chunk {chunk_index})")
+            raise SystemExit(
+                f"[FATAL] Telegram send failed (chunk {chunk_index}): "
+                f"status={resp.status_code}, response={data or resp.text}"
+            )
+
+        # 너무 빠른 연속 요청 방지
         time.sleep(0.5)
+
+    print("[INFO] 모든 텔레그램 메시지 전송 성공")
+
 
 # ----------------------------------------
 # 메인 실행
@@ -448,12 +482,13 @@ def main():
 
             webview_text += "\n\n"
 
-
     # 5. Telegraph 페이지 생성 (긴 화면용)
     webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
 
     if webview_url:
         telegram_msg += f"\n\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
+    else:
+        telegram_msg += "\n\n⚠️ 전체 리포트 웹뷰 생성에 실패했습니다. GitHub Actions 로그를 확인하세요."
 
     # 6. 전송
     print("[INFO] 텔레그램 전송 중...")
