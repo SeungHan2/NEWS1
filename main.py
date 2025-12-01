@@ -339,14 +339,37 @@ def send_telegram(message: str):
     print(f"[DEBUG] Telegram URL fragment (masked): {masked_url[:80]}")
     print(f"[DEBUG] Telegram CHAT_ID: {TELEGRAM_CHAT_ID}")
 
-    chunk_size = 4000
-    total_len = len(message)
-    print(f"[DEBUG] Telegram message length: {total_len}, chunk_size: {chunk_size}")
+    def split_message(msg: str, chunk_size: int = 4000) -> list[str]:
+        """Split by line to avoid cutting HTML tags mid-way; fallback to slicing if a line is too long."""
+        chunks = []
+        current = []
+        current_len = 0
+        for line in msg.splitlines(keepends=True):
+            if len(line) >= chunk_size:  # very long single line, hard-split
+                if current:
+                    chunks.append("".join(current))
+                    current = []
+                    current_len = 0
+                for i in range(0, len(line), chunk_size):
+                    chunks.append(line[i : i + chunk_size])
+                continue
+            if current_len + len(line) > chunk_size:
+                chunks.append("".join(current))
+                current = [line]
+                current_len = len(line)
+            else:
+                current.append(line)
+                current_len += len(line)
+        if current:
+            chunks.append("".join(current))
+        return chunks
 
-    chunk_index = 0
-    for i in range(0, total_len, chunk_size):
-        chunk_index += 1
-        chunk_text = message[i : i + chunk_size]
+    chunk_size = 4000
+    chunks = split_message(message, chunk_size=chunk_size)
+    total_len = len(message)
+    print(f"[DEBUG] Telegram message length: {total_len}, chunk_size: {chunk_size}, chunks={len(chunks)}")
+
+    for chunk_index, chunk_text in enumerate(chunks, start=1):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": chunk_text,
