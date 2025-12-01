@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import html
 import requests
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
@@ -40,6 +41,11 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 사용할 GPT 모델 (원하면 환경변수로 빼도 됨)
 GPT_MODEL_NAME = os.getenv("GPT_MODEL_NAME", "gpt-5-mini").strip()
+
+
+def escape_html(text: str) -> str:
+    """Escape user/content strings for safe Telegram HTML."""
+    return html.escape(text or "", quote=True)
 
 
 PRESS_LIST: List[Tuple[str, str]] = [
@@ -396,6 +402,7 @@ def main():
         stats[item["source"]] = stats.get(item["source"], 0) + 1
 
     header_stats = " | ".join([f"{k} {v}" for k, v in stats.items()])
+    safe_header_stats = escape_html(header_stats)
 
     # 2. 본문 크롤링
     contents = fetch_contents_parallel(links)
@@ -411,7 +418,7 @@ def main():
     today_str = get_kst_today()
 
     telegram_msg = f"<b>🗞 {today_str} 신문 1면 브리핑</b>\n\n"
-    telegram_msg += f"📊 <b>수집 현황:</b> {header_stats}\n\n"
+    telegram_msg += f"📊 <b>수집 현황:</b> {safe_header_stats}\n\n"
 
     webview_text = f"📰 {today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
 
@@ -432,20 +439,23 @@ def main():
             press_critiques = topic.get("press_critiques", [])
 
             # --- 텔레그램 메시지 구성 ---
+            title_safe = escape_html(title)
             telegram_msg += f"━━━━━━━━━━━━━━\n"
-            telegram_msg += f"📌 <b>{title}</b> ({len(ids)}건)\n"
+            telegram_msg += f"📌 <b>{title_safe}</b> ({len(ids)}건)\n"
 
             # 기사 링크 모음
             link_tags = []
             for idx in ids:
                 if idx < len(contents):
                     item = contents[idx]
-                    link_tags.append(f"<a href='{item['url']}'>{item['source']}</a>")
+                    link_tags.append(
+                        f"<a href=\"{escape_html(item['url'])}\">{escape_html(item['source'])}</a>"
+                    )
             telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
 
             # 핵심 요약
             for bullet in bullets:
-                telegram_msg += f"• {bullet}\n"
+                telegram_msg += f"• {escape_html(bullet)}\n"
             telegram_msg += "\n"
 
             # 🔍 언론사별 비판/논조 요약 (간단 버전)
@@ -455,7 +465,7 @@ def main():
                     src = pc.get("source", "")
                     pos = pc.get("position", "")
                     if src and pos:
-                        telegram_msg += f"- {src}: {pos}\n"
+                        telegram_msg += f"- {escape_html(src)}: {escape_html(pos)}\n"
                 telegram_msg += "\n"
 
             # --- 웹뷰 텍스트 구성 ---
@@ -486,7 +496,8 @@ def main():
     webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
 
     if webview_url:
-        telegram_msg += f"\n\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
+        webview_url_safe = escape_html(webview_url)
+        telegram_msg += f"\n\n📱 <b><a href='{webview_url_safe}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
     else:
         telegram_msg += "\n\n⚠️ 전체 리포트 웹뷰 생성에 실패했습니다. GitHub Actions 로그를 확인하세요."
 
