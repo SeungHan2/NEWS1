@@ -26,8 +26,9 @@ jobs:
 
       - name: Run News Scraper & Analyzer
         env:
-          # 깃허브 Settings > Secrets and variables > Actions에 등록된 키들
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # [변경됨] OpenAI 키 대신 Gemini 키를 사용하도록 수정
+          # 주의: GitHub Repository Settings > Secrets에 'GEMINI_API_KEY'를 먼저 등록해야 합니다.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
