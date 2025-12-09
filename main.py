@@ -56,7 +56,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 # 사용할 모델 (기본값: gemini-1.5-flash)
 # 뉴스 요약용으로는 1.5 Flash가 속도/비용 면에서 유리하며,
 # 더 깊은 추론이 필요하면 'gemini-1.5-pro'로 변경하세요.
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-001").strip()
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash").strip()
 
 def escape_html(text: str) -> str:
     """Escape user/content strings for safe Telegram HTML."""
