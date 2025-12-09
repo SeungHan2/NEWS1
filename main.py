@@ -11,7 +11,20 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 # [NEW] Google Generative AI 라이브러리 임포트
+# [디버깅 코드 시작] main.py 상단 import 아래에 붙여넣기
 import google.generativeai as genai
+
+print(f"[{genai.__version__}] 라이브러리 버전 확인")
+
+try:
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    print("📋 사용 가능한 모델 목록:")
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f" - {m.name}")
+except Exception as e:
+    print(f"❌ 모델 목록 조회 실패: {e}")
+# [디버깅 코드 끝]
 from google.api_core import retry
 
 # ----------------------------------------
@@ -40,10 +53,10 @@ if not GEMINI_API_KEY:
 # [NEW] Gemini 설정
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 사용할 모델 (기본값: gemini-1.5-flash-latest)
+# 사용할 모델 (기본값: gemini-1.5-flash)
 # 뉴스 요약용으로는 1.5 Flash가 속도/비용 면에서 유리하며,
 # 더 깊은 추론이 필요하면 'gemini-1.5-pro'로 변경하세요.
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest").strip()
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-001").strip()
 
 def escape_html(text: str) -> str:
     """Escape user/content strings for safe Telegram HTML."""
