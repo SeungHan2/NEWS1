@@ -143,7 +143,7 @@ def fetch_single_article_content(item: dict) -> dict:
         return {
             "source": item["source"],
             "url": item["url"],
-            "content": content[:4000] if content else "본문 없음"
+            "content": content[:30000] if content else "본문 없음"
         }
     except Exception:
         return item
@@ -163,7 +163,7 @@ def analyze_with_gemini(articles: list) -> dict:
     # 기사 본문 모으기
     articles_text = ""
     for i, art in enumerate(articles):
-        articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
+        articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:30000]}\n"
 
     # Gemini에게 요청할 시스템 프롬프트
     system_instruction = """
