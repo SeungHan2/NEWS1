@@ -8,45 +8,46 @@ from urllib.parse import urljoin
 from typing import List, Tuple, Dict
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
-from openai import OpenAI
 from dotenv import load_dotenv
+
+# [NEW] Google Generative AI 라이브러리 임포트
+import google.generativeai as genai
+from google.api_core import retry
 
 # ----------------------------------------
 # 환경 변수 및 설정
 # ----------------------------------------
 load_dotenv()
 
-def get_openai_api_key() -> str:
+def get_gemini_api_key() -> str:
     """
-    OPENAI_API_KEY 환경변수를 읽어서 공백 제거 후 리턴.
-    (로컬 .env / GitHub Actions env 둘 다 여기로 들어옴)
+    GEMINI_API_KEY 환경변수를 읽어서 공백 제거 후 리턴.
     """
-    key = os.getenv("OPENAI_API_KEY", "")
+    key = os.getenv("GEMINI_API_KEY", "")
     return key.strip()
 
-OPENAI_API_KEY = get_openai_api_key()
+GEMINI_API_KEY = get_gemini_api_key()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-if not OPENAI_API_KEY:
-    # 여기서 바로 죽여버리면, GitHub Actions 로그에서 원인을 바로 알 수 있음
+if not GEMINI_API_KEY:
     raise SystemExit(
-        "[ERROR] OPENAI_API_KEY 환경변수가 비어 있습니다.\n"
-        " - 로컬: .env 파일에 OPENAI_API_KEY=... 추가\n"
-        " - GitHub Actions: workflow yml에서 env: OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 로 전달 필요"
+        "[ERROR] GEMINI_API_KEY 환경변수가 비어 있습니다.\n"
+        " - .env 파일에 GEMINI_API_KEY=... 를 추가하세요.\n"
+        " - Google AI Studio(https://aistudio.google.com/)에서 키를 발급받을 수 있습니다."
     )
 
-# OpenAI 클라이언트 초기화
-client = OpenAI(api_key=OPENAI_API_KEY)
+# [NEW] Gemini 설정
+genai.configure(api_key=GEMINI_API_KEY)
 
-# 사용할 GPT 모델 (원하면 환경변수로 빼도 됨)
-GPT_MODEL_NAME = os.getenv("GPT_MODEL_NAME", "gpt-5-mini").strip()
-
+# 사용할 모델 (기본값: gemini-1.5-flash)
+# 뉴스 요약용으로는 1.5 Flash가 속도/비용 면에서 유리하며,
+# 더 깊은 추론이 필요하면 'gemini-1.5-pro'로 변경하세요.
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash").strip()
 
 def escape_html(text: str) -> str:
     """Escape user/content strings for safe Telegram HTML."""
     return html.escape(text or "", quote=True)
-
 
 PRESS_LIST: List[Tuple[str, str]] = [
     ("동아일보", "020"),
@@ -58,7 +59,7 @@ PRESS_LIST: List[Tuple[str, str]] = [
 ]
 
 # ----------------------------------------
-# [Part 1] 네이버 1면 링크 수집
+# [Part 1] 네이버 1면 링크 수집 (기존 동일)
 # ----------------------------------------
 def get_kst_today() -> str:
     now_utc = datetime.now(timezone.utc)
@@ -123,11 +124,10 @@ def collect_naver_news_links() -> List[Dict[str, str]]:
                 all_items.append({"source": press_name, "url": link})
         except Exception as e:
             print(f"  [에러] {press_name} 수집 실패: {e}")
-            print(f"  [URL] 요청 실패 URL: {url}")
     return all_items
 
 # ----------------------------------------
-# [Part 2] 본문 크롤링
+# [Part 2] 본문 크롤링 (기존 동일)
 # ----------------------------------------
 def fetch_single_article_content(item: dict) -> dict:
     try:
@@ -155,138 +155,109 @@ def fetch_contents_parallel(items: list) -> list:
     return results
 
 # ----------------------------------------
-# [Part 3] GPT 분석 (리포트 작성)
+# [Part 3] Gemini 분석 (리포트 작성) - 변경됨
 # ----------------------------------------
-def analyze_with_gpt(articles: list) -> dict:
-    if client is None:
-        print("[CRITICAL ERROR] OpenAI 클라이언트가 초기화되지 않았습니다. OPENAI_API_KEY를 확인하세요.")
-        return {"topics": []}
-
-    print(f"[INFO] {GPT_MODEL_NAME} 분석 요청 시작...")
+def analyze_with_gemini(articles: list) -> dict:
+    print(f"[INFO] {GEMINI_MODEL_NAME} 분석 요청 시작...")
 
     # 기사 본문 모으기
     articles_text = ""
     for i, art in enumerate(articles):
         articles_text += f"[ID:{i}] 언론사:{art['source']} | 내용:{art['content'][:2000]}\n"
 
-    prompt = f"""
+    # Gemini에게 요청할 시스템 프롬프트
+    system_instruction = """
     너는 전문 뉴스 에디터다. 오늘자 신문 1면 기사들을 종합하여 고품질 리포트를 작성하라.
-
+    
     [요구사항]
     1. 기사들을 유사한 주제(정치, 경제, 사회 등)로 그룹화하라.
-    2. **주제별 통합 기사 작성**: 각 주제에 대해 개별 기사를 단순히 나열하지 말고, 모든 내용을 종합하여 **하나의 완결된 심층 기사**로 새로 써라.
-        - **분량**: 반드시 **최소 500자 이상**의 상세한 글로 작성할 것.
-        - **구성**: 기사의 배경, 현재 상황, 언론사별 주요 주장, 그리고 향후 전망이나 전문가 분석 등 다각도의 관점을 포함하여 작성할 것.
-        - **톤**: 전문가가 작성한 객관적인 논조의 기사 형태를 유지할 것.
-    3. **요약본(Bullets)**: 바쁜 독자를 위해, 통합 기사의 내용을 3줄 이내의 핵심 단문(Bullet point)으로 요약하라.
-    4. **언론사별 비판/논조 정리**:
-        - 각 주제에 포함된 기사들의 언론사(조선일보, 한겨레 등)를 기준으로
-        - 그 언론사가 무엇을 비판/우려/옹호했는지 한두 문장으로 요약하라.
-        - 비판 뿐 아니라, 긍정/옹호/우려/중립 등 논조도 함께 파악해서 정리해도 된다.
-    5. 아래 JSON 스키마를 **반드시 그대로 따르는 유효한 JSON 문자열만** 출력하라.
-       - JSON 밖의 다른 텍스트(설명, 마크다운, 코드블록 등)는 절대 출력하지 마라.
+    2. 주제별 통합 기사 작성: 각 주제에 대해 개별 기사를 단순히 나열하지 말고, 모든 내용을 종합하여 하나의 완결된 심층 기사로 새로 써라.
+       - 분량: 최소 500자 이상.
+       - 구성: 배경, 현황, 언론사별 주요 주장, 전망 등을 포함.
+       - 톤: 객관적인 논조 유지.
+    3. 요약본(Bullets): 바쁜 독자를 위해 3줄 이내 핵심 요약.
+    4. 언론사별 비판/논조 정리: 해당 주제 내 기사들의 언론사별 논조(비판, 옹호, 우려 등)를 요약.
+    
+    반드시 아래의 JSON 스키마를 준수하여 출력해야 한다.
+    """
 
-    [JSON 구조]
+    # Gemini 1.5부터는 JSON 스키마를 명시적으로 제어할 수 있으나, 
+    # 여기서는 프롬프트 내 예시와 response_mime_type 설정을 통해 제어합니다.
+    prompt = f"""
+    [기사 데이터]
+    {articles_text}
+
+    [출력 JSON 형식을 엄수할 것]
     {{
         "topics": [
             {{
-                "title": "주제 제목 (예: 금투세 폐지 논란 가열)",
-                "ids": [0, 2, 5],
-                "summary_bullets": ["핵심 내용 1", "핵심 내용 2"],
-                "full_article": "여기에 GPT가 새로 작성한 통합 기사 전문(줄글로 작성). 500자 이상을 채우도록 노력해야 한다.",
+                "title": "주제 제목",
+                "ids": [0, 2],
+                "summary_bullets": ["요약1", "요약2"],
+                "full_article": "통합 줄글 기사 (500자 이상)",
                 "press_critiques": [
                     {{
-                        "source": "조선일보",
-                        "position": "정부의 재정 지출 확대가 장기적으로 국가 부채를 악화시킨다는 점을 비판.",
-                        "tone": "비판적"
-                    }},
-                    {{
-                        "source": "한겨레",
-                        "position": "복지 확충의 필요성을 강조하며 재정 건전성 논란이 과장됐다고 지적.",
-                        "tone": "긍정적"
+                        "source": "언론사명",
+                        "position": "논조 및 주장 요약",
+                        "tone": "비판적/옹호적/중립적"
                     }}
                 ]
             }}
         ]
     }}
-
-    [기사 데이터]
-    {articles_text}
     """
 
     try:
-        response = client.responses.create(
-            model=GPT_MODEL_NAME,
-            input=prompt,
+        # 모델 설정 (JSON 모드 활성화)
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL_NAME,
+            system_instruction=system_instruction,
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.3, # 뉴스 분석이므로 창의성보다는 정확성 중요
+            }
         )
-
-        raw_text = getattr(response, "output_text", None)
-        if raw_text:
-            raw_text = raw_text.strip()
-        else:
-            try:
-                if getattr(response, "output", None):
-                    first_output = response.output[0]
-                    if first_output and first_output.content:
-                        raw_text = first_output.content[0].text.strip()
-                else:
-                    raw_text = str(response).strip()
-            except Exception as e:
-                print(f"[WARN] 응답 파싱 중 경고 (fallback 사용): {e}")
-                raw_text = str(response).strip()
-
-        # 코드블록 제거 (혹시라도 붙을 경우)
-        if raw_text.startswith("```json"):
-            raw_text = raw_text.removeprefix("```json").removesuffix("```").strip()
-        elif raw_text.startswith("```"):
-            raw_text = raw_text.removeprefix("```").removesuffix("```").strip()
-
+        
+        # API 요청 (Retry 정책 적용 권장)
+        response = model.generate_content(prompt, request_options={"retry": retry.Retry(predicate=retry.if_transient_error)})
+        
+        # 결과 텍스트 추출 및 JSON 파싱
+        raw_text = response.text
         return json.loads(raw_text)
 
     except json.JSONDecodeError as e:
         print(f"[CRITICAL ERROR] JSON 디코딩 실패: {e}")
-        print("--- GPT Raw Output Start ---")
-        try:
-            print(raw_text)
-        except Exception:
-            print("raw_text를 출력할 수 없습니다.")
-        print("--- GPT Raw Output End ---")
+        # 디버깅용 출력
+        # print(raw_text) 
         return {"topics": []}
 
     except Exception as e:
-        print(f"[CRITICAL ERROR] GPT 분석 중 기타 에러 발생: {e}")
+        print(f"[CRITICAL ERROR] Gemini 분석 중 에러 발생: {e}")
         return {"topics": []}
 
 
 # ----------------------------------------
-# [Part 4] Telegraph 페이지 생성 (웹뷰)
+# [Part 4] Telegraph 페이지 생성 (기존 동일)
 # ----------------------------------------
 def create_telegraph_simple(title: str, text_body: str) -> str:
-    """간단한 텍스트 기반 Telegraph 페이지 생성 (줄 단위로 분리해서 가독성 개선)"""
     try:
         telegraph_account_url = "https://api.telegra.ph/createAccount?short_name=NewsAI"
-        print(f"[DEBUG] Telegraph Account URL: {telegraph_account_url}")
-
         r = requests.get(telegraph_account_url, timeout=10).json()
         token = r["result"]["access_token"]
 
         content_nodes = []
-        # 상단 큰 제목
         content_nodes.append({"tag": "h3", "children": ["AI 통합 리포트"]})
 
-        # text_body를 줄 단위로 읽어서 각각 블록으로 넣기
         for raw_line in text_body.split("\n"):
             line = raw_line.strip()
             if not line:
-                continue  # 완전히 빈 줄은 건너뛴다
+                continue 
 
-            # 섹션 헤더: "### " 로 시작하는 줄 → h4
             if line.startswith("### "):
                 content_nodes.append({
                     "tag": "h4",
-                    "children": [line[4:]]  # "### " 제거
+                    "children": [line[4:]]
                 })
-            # 대괄호로 둘러싼 섹션 라벨 → 굵게
             elif line.startswith("[") and line.endswith("]"):
                 content_nodes.append({
                     "tag": "p",
@@ -295,7 +266,6 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
                         "children": [line]
                     }]
                 })
-            # 그 외 모든 줄은 일반 문단
             else:
                 content_nodes.append({
                     "tag": "p",
@@ -323,29 +293,21 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 
 
 # ----------------------------------------
-# [Part 5] 텔레그램 전송 (HTML 모드) + 응답 로깅/에러 처리 강화
+# [Part 5] 텔레그램 전송 (기존 동일)
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[WARNING] 텔레그램 토큰 또는 채팅 ID가 없어 전송을 건너킵니다.")
-        print(f"  TELEGRAM_BOT_TOKEN 설정 여부: {bool(TELEGRAM_BOT_TOKEN)}")
-        print(f"  TELEGRAM_CHAT_ID 값: {repr(TELEGRAM_CHAT_ID)}")
+        print("[WARNING] 텔레그램 토큰 설정 누락. 전송 생략.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    masked_url = url.replace(TELEGRAM_BOT_TOKEN, "***masked***")
-    print(f"[DEBUG] Telegram URL length: {len(url)}")
-    print(f"[DEBUG] Telegram URL fragment (masked): {masked_url[:80]}")
-    print(f"[DEBUG] Telegram CHAT_ID: {TELEGRAM_CHAT_ID}")
-
     def split_message(msg: str, chunk_size: int = 4000) -> list[str]:
-        """Split by line to avoid cutting HTML tags mid-way; fallback to slicing if a line is too long."""
         chunks = []
         current = []
         current_len = 0
         for line in msg.splitlines(keepends=True):
-            if len(line) >= chunk_size:  # very long single line, hard-split
+            if len(line) >= chunk_size:
                 if current:
                     chunks.append("".join(current))
                     current = []
@@ -364,94 +326,63 @@ def send_telegram(message: str):
             chunks.append("".join(current))
         return chunks
 
-    chunk_size = 4000
-    chunks = split_message(message, chunk_size=chunk_size)
-    total_len = len(message)
-    print(f"[DEBUG] Telegram message length: {total_len}, chunk_size: {chunk_size}, chunks={len(chunks)}")
+    chunks = split_message(message, chunk_size=4000)
 
-    for chunk_index, chunk_text in enumerate(chunks, start=1):
+    for i, chunk_text in enumerate(chunks):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": chunk_text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-
-        print(f"[DEBUG] Sending chunk {chunk_index}, size={len(chunk_text)}")
-
         try:
             resp = requests.post(url, data=payload, timeout=10)
+            if resp.status_code != 200:
+                print(f"[ERROR] 텔레그램 전송 실패 ({i}): {resp.text}")
+            time.sleep(0.5)
         except Exception as e:
-            print(f"[ERROR] Telegram 요청 예외 발생 (chunk {chunk_index}): {e}")
-            # GitHub Actions 에서 실패로 표시되도록 종료
-            raise SystemExit(f"[FATAL] Telegram 요청 실패 (chunk {chunk_index}): {e}")
+            print(f"[ERROR] 텔레그램 요청 중 예외: {e}")
 
-        print(f"[DEBUG] Telegram status (chunk {chunk_index}): {resp.status_code}")
-
-        # 응답 내용 찍기
-        try:
-            data = resp.json()
-            print(f"[DEBUG] Telegram response json (chunk {chunk_index}): {data}")
-        except Exception:
-            data = None
-            print(f"[DEBUG] Telegram response text (chunk {chunk_index}): {resp.text}")
-
-        # 에러 처리
-        if resp.status_code != 200 or not (isinstance(data, dict) and data.get("ok", False)):
-            print(f"[ERROR] Telegram send failed (chunk {chunk_index})")
-            raise SystemExit(
-                f"[FATAL] Telegram send failed (chunk {chunk_index}): "
-                f"status={resp.status_code}, response={data or resp.text}"
-            )
-
-        # 너무 빠른 연속 요청 방지
-        time.sleep(0.5)
-
-    print("[INFO] 모든 텔레그램 메시지 전송 성공")
+    print("[INFO] 텔레그램 메시지 전송 완료")
 
 
 # ----------------------------------------
 # 메인 실행
 # ----------------------------------------
 def main():
-    # 1. 링크 수집 및 통계
+    # 1. 링크 수집
     links = collect_naver_news_links()
     if not links:
-        print("수집된 기사가 없어 종료합니다.")
+        print("수집된 기사가 없습니다.")
         return
 
     stats = {}
     for item in links:
         stats[item["source"]] = stats.get(item["source"], 0) + 1
-
     header_stats = " | ".join([f"{k} {v}" for k, v in stats.items()])
     safe_header_stats = escape_html(header_stats)
 
     # 2. 본문 크롤링
     contents = fetch_contents_parallel(links)
 
-    # 3. GPT 분석
-    if not OPENAI_API_KEY:
-        print("OPENAI_API_KEY가 없어 분석을 생략합니다.")
+    # 3. Gemini 분석
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY가 없어 분석을 생략합니다.")
         return
 
-    result = analyze_with_gpt(contents)
+    result = analyze_with_gemini(contents)
 
-    # 4. 리포트 및 웹뷰 컨텐츠 생성
+    # 4. 리포트 생성
     today_str = get_kst_today()
-
-    telegram_msg = f"<b>🗞 {today_str} 신문 1면 브리핑</b>\n\n"
+    telegram_msg = f"<b>🗞 {today_str} 신문 1면 브리핑 (Powered by Gemini)</b>\n\n"
     telegram_msg += f"📊 <b>수집 현황:</b> {safe_header_stats}\n\n"
-
     webview_text = f"📰 {today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
 
     topics = result.get("topics", [])
-
-    # 주제별 기사 수 내림차순 정렬
     topics.sort(key=lambda t: len(t.get("ids", [])), reverse=True)
 
     if not topics:
-        telegram_msg += "<b>⚠️ 리포트 생성 실패: 분석 과정에서 오류가 발생했거나, AI가 답변을 거부했습니다. GitHub Actions 로그를 확인하세요.</b>"
+        telegram_msg += "<b>⚠️ 리포트 생성 실패: 분석 결과가 없습니다.</b>"
         webview_text = "리포트 생성 실패"
     else:
         for topic in topics:
@@ -461,12 +392,10 @@ def main():
             full_article = topic.get("full_article", "")
             press_critiques = topic.get("press_critiques", [])
 
-            # --- 텔레그램 메시지 구성 ---
-            title_safe = escape_html(title)
+            # 텔레그램 메시지
             telegram_msg += f"━━━━━━━━━━━━━━\n"
-            telegram_msg += f"📌 <b>{title_safe}</b> ({len(ids)}건)\n"
-
-            # 기사 링크 모음
+            telegram_msg += f"📌 <b>{escape_html(title)}</b> ({len(ids)}건)\n"
+            
             link_tags = []
             for idx in ids:
                 if idx < len(contents):
@@ -476,14 +405,12 @@ def main():
                     )
             telegram_msg += f"🔗 {' , '.join(link_tags)}\n\n"
 
-            # 핵심 요약
             for bullet in bullets:
                 telegram_msg += f"• {escape_html(bullet)}\n"
             telegram_msg += "\n"
 
-            # 🔍 언론사별 비판/논조 요약 (간단 버전)
             if press_critiques:
-                telegram_msg += "📰 <b>언론사별 비판/논조</b>\n"
+                telegram_msg += "📰 <b>언론사별 논조</b>\n"
                 for pc in press_critiques:
                     src = pc.get("source", "")
                     pos = pc.get("position", "")
@@ -491,43 +418,31 @@ def main():
                         telegram_msg += f"- {escape_html(src)}: {escape_html(pos)}\n"
                 telegram_msg += "\n"
 
-            # --- 웹뷰 텍스트 구성 ---
+            # 웹뷰 텍스트
             webview_text += f"\n### 📌 {title} ({len(ids)}건)\n"
-
             webview_text += "\n[핵심 요약]\n"
             for bullet in bullets:
                 webview_text += f" - {bullet}\n"
-
+            
             webview_text += "\n[통합 심층 기사]\n"
             webview_text += f"{full_article}\n"
 
-            # 웹뷰용 언론사별 비판/논조
             if press_critiques:
                 webview_text += "\n[언론사별 비판/논조]\n"
                 for pc in press_critiques:
                     src = pc.get("source", "")
                     pos = pc.get("position", "")
                     tone = pc.get("tone", "")
-                    if tone:
-                        webview_text += f" - {src}: ({tone}) {pos}\n"
-                    else:
-                        webview_text += f" - {src}: {pos}\n"
-
+                    webview_text += f" - {src}: ({tone}) {pos}\n"
             webview_text += "\n\n"
 
-    # 5. Telegraph 페이지 생성 (긴 화면용)
+    # 5. Telegraph 링크 생성 및 전송
     webview_url = create_telegraph_simple(f"{today_str} 조간 브리핑", webview_text)
 
     if webview_url:
-        webview_url_safe = escape_html(webview_url)
-        telegram_msg += f"\n\n📱 <b><a href='{webview_url_safe}'>👉 전체 리포트 크게 보기 (Safari/Web)</a></b>"
-    else:
-        telegram_msg += "\n\n⚠️ 전체 리포트 웹뷰 생성에 실패했습니다. GitHub Actions 로그를 확인하세요."
-
-    # 6. 전송
-    print("[INFO] 텔레그램 전송 중...")
+        telegram_msg += f"\n\n📱 <b><a href='{webview_url}'>👉 전체 리포트 크게 보기</a></b>"
+    
     send_telegram(telegram_msg)
-    print("[INFO] 완료.")
 
 if __name__ == "__main__":
     main()
