@@ -218,16 +218,15 @@ def analyze_with_gemini(articles: list) -> dict:
     """
 
     try:
-        # 모델 설정 (JSON 모드 활성화)
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL_NAME,
-            generation_config={"response_mime_type": "application/json"}, # 이 설정을 추가하세요
-            system_instruction=system_instruction,
-            generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.3, # 뉴스 분석이므로 창의성보다는 정확성 중요
-            }
-        )
+            # 모델 설정 (JSON 모드 활성화)
+            model = genai.GenerativeModel(
+                model_name=GEMINI_MODEL_NAME,
+                system_instruction=system_instruction,
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.3, # 뉴스 분석이므로 창의성보다는 정확성 중요
+                }
+            )
         
         # API 요청 (Retry 정책 적용 권장)
         response = model.generate_content(prompt, request_options={"retry": retry.Retry(predicate=retry.if_transient_error)})
