@@ -3,6 +3,7 @@ import time
 import json
 import html
 import requests
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 from typing import List, Tuple, Dict
@@ -10,21 +11,8 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
-# [NEW] Google Generative AI 라이브러리 임포트
-# [디버깅 코드 시작] main.py 상단 import 아래에 붙여넣기
+# Google Generative AI 라이브러리
 import google.generativeai as genai
-
-print(f"[{genai.__version__}] 라이브러리 버전 확인")
-
-try:
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    print("📋 사용 가능한 모델 목록:")
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(f" - {m.name}")
-except Exception as e:
-    print(f"❌ 모델 목록 조회 실패: {e}")
-# [디버깅 코드 끝]
 from google.api_core import retry
 
 # ----------------------------------------
@@ -33,27 +21,24 @@ from google.api_core import retry
 load_dotenv()
 
 def get_gemini_api_key() -> str:
-    """
-    GEMINI_API_KEY 환경변수를 읽어서 공백 제거 후 리턴.
-    """
+    """GEMINI_API_KEY 환경변수를 읽어서 공백 제거 후 리턴."""
     key = os.getenv("GEMINI_API_KEY", "")
     return key.strip()
 
 GEMINI_API_KEY = get_gemini_api_key()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip()
 
 if not GEMINI_API_KEY:
     raise SystemExit(
         "[ERROR] GEMINI_API_KEY 환경변수가 비어 있습니다.\n"
-        " - .env 파일에 GEMINI_API_KEY=... 를 추가하세요.\n"
-        " - Google AI Studio(https://aistudio.google.com/)에서 키를 발급받을 수 있습니다."
+        " - .env 파일에 GEMINI_API_KEY=... 를 추가하세요."
     )
 
-# [NEW] Gemini 설정
+# Gemini 초기 설정
 genai.configure(api_key=GEMINI_API_KEY)
 
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash").strip()
 
 def escape_html(text: str) -> str:
     """Escape user/content strings for safe Telegram HTML."""
@@ -69,7 +54,7 @@ PRESS_LIST: List[Tuple[str, str]] = [
 ]
 
 # ----------------------------------------
-# [Part 1] 네이버 1면 링크 수집 (기존 동일)
+# [Part 1] 네이버 1면 링크 수집
 # ----------------------------------------
 def get_kst_today() -> str:
     now_utc = datetime.now(timezone.utc)
@@ -137,7 +122,7 @@ def collect_naver_news_links() -> List[Dict[str, str]]:
     return all_items
 
 # ----------------------------------------
-# [Part 2] 본문 크롤링 (기존 동일)
+# [Part 2] 본문 크롤링
 # ----------------------------------------
 def fetch_single_article_content(item: dict) -> dict:
     try:
@@ -165,7 +150,7 @@ def fetch_contents_parallel(items: list) -> list:
     return results
 
 # ----------------------------------------
-# [Part 3] Gemini 분석 (리포트 작성) - 변경됨
+# [Part 3] Gemini 분석 (수정됨)
 # ----------------------------------------
 def analyze_with_gemini(articles: list) -> dict:
     print(f"[INFO] {GEMINI_MODEL_NAME} 분석 요청 시작...")
@@ -182,17 +167,15 @@ def analyze_with_gemini(articles: list) -> dict:
     [요구사항]
     1. 기사들을 유사한 주제(정치, 경제, 사회 등)로 그룹화하라.
     2. 주제별 통합 기사 작성: 각 주제에 대해 개별 기사를 단순히 나열하지 말고, 모든 내용을 종합하여 하나의 완결된 심층 기사로 새로 써라.
-       - 분량: 최소 500자 이상.
-       - 구성: 배경, 현황, 언론사별 주요 주장, 전망 등을 포함.
-       - 톤: 객관적인 논조 유지.
+        - 분량: 최소 500자 이상.
+        - 구성: 배경, 현황, 언론사별 주요 주장, 전망 등을 포함.
+        - 톤: 객관적인 논조 유지.
     3. 요약본(Bullets): 바쁜 독자를 위해 3줄 이내 핵심 요약.
     4. 언론사별 비판/논조 정리: 해당 주제 내 기사들의 언론사별 논조(비판, 옹호, 우려 등)를 요약.
     
-    반드시 아래의 JSON 스키마를 준수하여 출력해야 한다.
+    반드시 JSON 형식으로만 응답해야 한다.
     """
 
-    # Gemini 1.5부터는 JSON 스키마를 명시적으로 제어할 수 있으나, 
-    # 여기서는 프롬프트 내 예시와 response_mime_type 설정을 통해 제어합니다.
     prompt = f"""
     [기사 데이터]
     {articles_text}
@@ -218,27 +201,28 @@ def analyze_with_gemini(articles: list) -> dict:
     """
 
     try:
-            # 모델 설정 (JSON 모드 활성화)
-            model = genai.GenerativeModel(
-                model_name=GEMINI_MODEL_NAME,
-                system_instruction=system_instruction,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0.3, # 뉴스 분석이므로 창의성보다는 정확성 중요
-                }
-            )
+        # [수정 완료] 모델 설정 및 JSON 강제 모드 적용
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL_NAME,
+            system_instruction=system_instruction,
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.3,
+            }
+        )
         
-        # API 요청 (Retry 정책 적용 권장)
-        response = model.generate_content(prompt, request_options={"retry": retry.Retry(predicate=retry.if_transient_error)})
+        # API 요청
+        response = model.generate_content(
+            prompt, 
+            request_options={"retry": retry.Retry(predicate=retry.if_transient_error)}
+        )
         
         # 결과 텍스트 추출 및 JSON 파싱
-        raw_text = response.text
-        return json.loads(raw_text)
+        return json.loads(response.text)
 
     except json.JSONDecodeError as e:
         print(f"[CRITICAL ERROR] JSON 디코딩 실패: {e}")
-        # 디버깅용 출력
-        # print(raw_text) 
+        # 실패 시 빈 결과 반환하여 프로그램 중단 방지
         return {"topics": []}
 
     except Exception as e:
@@ -247,7 +231,7 @@ def analyze_with_gemini(articles: list) -> dict:
 
 
 # ----------------------------------------
-# [Part 4] Telegraph 페이지 생성 (기존 동일)
+# [Part 4] Telegraph 페이지 생성
 # ----------------------------------------
 def create_telegraph_simple(title: str, text_body: str) -> str:
     try:
@@ -303,7 +287,7 @@ def create_telegraph_simple(title: str, text_body: str) -> str:
 
 
 # ----------------------------------------
-# [Part 5] 텔레그램 전송 (기존 동일)
+# [Part 5] 텔레그램 전송
 # ----------------------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -389,6 +373,8 @@ def main():
     webview_text = f"📰 {today_str} 신문 1면 통합 리포트\n\n[수집 현황] {header_stats}\n\n"
 
     topics = result.get("topics", [])
+    
+    # 기사 많은 순 정렬
     topics.sort(key=lambda t: len(t.get("ids", [])), reverse=True)
 
     if not topics:
